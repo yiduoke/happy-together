@@ -7,13 +7,7 @@ import { KeyboardShortcuts } from '@/lib/KeyboardShortcuts';
 import { RecordingIndicator } from '@/lib/RecordingIndicator';
 import { SettingsMenu } from '@/lib/SettingsMenu';
 import { ConnectionDetails } from '@/lib/types';
-import {
-  formatChatMessageLinks,
-  LocalUserChoices,
-  PreJoin,
-  RoomContext,
-  VideoConference,
-} from '@livekit/components-react';
+import { LocalUserChoices, PreJoin, RoomContext } from '@livekit/components-react';
 import {
   ExternalE2EEKeyProvider,
   RoomOptions,
@@ -31,6 +25,7 @@ import { useSetupE2EE } from '@/lib/useSetupE2EE';
 import { useLowCPUOptimizer } from '@/lib/usePerfomanceOptimiser';
 import { WatchTogether } from '@/lib/WatchTogether';
 import { CopyLinkButton } from '@/lib/CopyLinkButton';
+import { Sidebar } from '@/lib/Sidebar';
 
 const CONN_DETAILS_ENDPOINT =
   process.env.NEXT_PUBLIC_CONN_DETAILS_ENDPOINT ?? '/api/connection-details';
@@ -236,10 +231,7 @@ function VideoConferenceComponent(props: {
         </div>
         {/* Sidebar: webcams, controls, chat */}
         <div style={{ width: 360, minWidth: 300, display: 'flex', flexDirection: 'column' }}>
-          <VideoConference
-            chatMessageFormatter={formatChatMessageLinks}
-            SettingsComponent={SHOW_SETTINGS_MENU ? SettingsMenu : undefined}
-          />
+          <Sidebar SettingsComponent={SHOW_SETTINGS_MENU ? SettingsMenu : undefined} />
         </div>
         <DebugMode />
         <RecordingIndicator />
