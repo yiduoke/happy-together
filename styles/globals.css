@@ -65,3 +65,30 @@ h2 a {
 h2 a {
   text-decoration: none;
 }
+
+/* Happy Together: the conference lives in a narrow sidebar, but LiveKit's
+   control bar sizes itself from the window width. Icon-only buttons keep
+   everything (incl. chat + leave) on one row instead of clipping. */
+.lk-video-conference .lk-control-bar {
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.25rem;
+}
+.lk-video-conference .lk-control-bar > .lk-button-group > .lk-button,
+.lk-video-conference .lk-control-bar > .lk-button {
+  font-size: 0;
+  gap: 0;
+}
+
+/* Chat panel: overlay the whole sidebar instead of splitting its 360px
+   with the webcam tiles (which left the input a few characters wide). */
+.lk-video-conference {
+  position: relative;
+}
+.lk-video-conference .lk-chat {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  z-index: 20;
+  background: var(--lk-bg);
+}
