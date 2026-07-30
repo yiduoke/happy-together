@@ -30,6 +30,7 @@ import { useRouter } from 'next/navigation';
 import { useSetupE2EE } from '@/lib/useSetupE2EE';
 import { useLowCPUOptimizer } from '@/lib/usePerfomanceOptimiser';
 import { WatchTogether } from '@/lib/WatchTogether';
+import { CopyLinkButton } from '@/lib/CopyLinkButton';
 
 const CONN_DETAILS_ENDPOINT =
   process.env.NEXT_PUBLIC_CONN_DETAILS_ENDPOINT ?? '/api/connection-details';
@@ -229,8 +230,9 @@ function VideoConferenceComponent(props: {
       <RoomContext.Provider value={room}>
         <KeyboardShortcuts />
         {/* Main stage: synced local-file playback */}
-        <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
           <WatchTogether />
+          <CopyLinkButton />
         </div>
         {/* Sidebar: webcams, controls, chat */}
         <div style={{ width: 360, minWidth: 300, display: 'flex', flexDirection: 'column' }}>
