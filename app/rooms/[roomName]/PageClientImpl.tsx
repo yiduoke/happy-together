@@ -29,6 +29,7 @@ import {
 import { useRouter } from 'next/navigation';
 import { useSetupE2EE } from '@/lib/useSetupE2EE';
 import { useLowCPUOptimizer } from '@/lib/usePerfomanceOptimiser';
+import { WatchTogether } from '@/lib/WatchTogether';
 
 const CONN_DETAILS_ENDPOINT =
   process.env.NEXT_PUBLIC_CONN_DETAILS_ENDPOINT ?? '/api/connection-details';
@@ -224,13 +225,20 @@ function VideoConferenceComponent(props: {
   }, [lowPowerMode]);
 
   return (
-    <div className="lk-room-container">
+    <div className="lk-room-container" style={{ display: 'flex', height: '100%' }}>
       <RoomContext.Provider value={room}>
         <KeyboardShortcuts />
-        <VideoConference
-          chatMessageFormatter={formatChatMessageLinks}
-          SettingsComponent={SHOW_SETTINGS_MENU ? SettingsMenu : undefined}
-        />
+        {/* Main stage: synced local-file playback */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <WatchTogether />
+        </div>
+        {/* Sidebar: webcams, controls, chat */}
+        <div style={{ width: 360, minWidth: 300, display: 'flex', flexDirection: 'column' }}>
+          <VideoConference
+            chatMessageFormatter={formatChatMessageLinks}
+            SettingsComponent={SHOW_SETTINGS_MENU ? SettingsMenu : undefined}
+          />
+        </div>
         <DebugMode />
         <RecordingIndicator />
       </RoomContext.Provider>

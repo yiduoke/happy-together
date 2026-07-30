@@ -1,0 +1,267 @@
+'use client';
+
+import React from 'react';
+import { useRoomContext } from '@livekit/components-react';
+import { RoomEvent, RemoteParticipant } from 'livekit-client';
+
+const SYNC_TOPIC = 'watch-sync';
+const TICK_INTERVAL_MS = 2000;
+// Drift thresholds (seconds)
+const HARD_SEEK_THRESHOLD = 3;
+const NUDGE_THRESHOLD = 0.3;
+
+type SyncMsg =
+  | { t: 'play'; time: number }
+  | { t: 'pause'; time: number }
+  | { t: 'seek'; time: number }
+  | { t: 'tick'; time: number; paused: boolean }
+  | { t: 'hello' }
+  | { t: 'state'; time: number; paused: boolean };
+
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+/**
+ * Main watch stage: each participant loads their OWN local copy of the video.
+ * Nothing is uploaded — only playback state syncs over LiveKit data messages.
+ *
+ * Sync model (based on watchparty/Syncplay):
+ * - play/pause/seek: any participant's action broadcasts; last writer wins.
+ * - drift: everyone broadcasts a `tick` while playing; a receiver only
+ *   corrects toward ticks from participants whose identity sorts before its
+ *   own, so exactly one participant acts as the clock master.
+ * - corrections under HARD_SEEK_THRESHOLD use playbackRate nudging so the
+ *   viewer never sees a jump.
+ */
+export function WatchTogether() {
+  const room = useRoomContext();
+  const videoRef = React.useRef<HTMLVideoElement | null>(null);
+  const [fileName, setFileName] = React.useState<string | null>(null);
+  const [objectUrl, setObjectUrl] = React.useState<string | null>(null);
+  // Applying a remote action fires the same video events as a local user
+  // action would. Each programmatic apply registers an expectation; the
+  // matching event consumes it instead of re-broadcasting. Unlike a time
+  // window, this never swallows a genuine user action that lands nearby.
+  const expected = React.useRef({ play: 0, pause: 0, seek: 0 });
+
+  const send = React.useCallback(
+    (msg: SyncMsg, reliable = true) => {
+      room.localParticipant
+        .publishData(encoder.encode(JSON.stringify(msg)), { reliable, topic: SYNC_TOPIC })
+        .catch(() => {});
+    },
+    [room],
+  );
+
+  // Consume one expected echo of `kind`; returns true if this event was
+  // caused by a remote apply and must not re-broadcast.
+  const consumeExpected = (kind: 'play' | 'pause' | 'seek') => {
+    if (expected.current[kind] > 0) {
+      expected.current[kind] -= 1;
+      return true;
+    }
+    return false;
+  };
+
+  const applySeek = (video: HTMLVideoElement, time: number) => {
+    expected.current.seek += 1;
+    video.currentTime = time;
+  };
+  const applyPlay = (video: HTMLVideoElement) => {
+    if (!video.paused) return;
+    expected.current.play += 1;
+    video.play().catch(() => {
+      expected.current.play = Math.max(0, expected.current.play - 1);
+    });
+  };
+  const applyPause = (video: HTMLVideoElement) => {
+    if (video.paused) return;
+    expected.current.pause += 1;
+    video.pause();
+  };
+
+  // Receive sync messages
+  React.useEffect(() => {
+    const onData = (
+      payload: Uint8Array,
+      participant?: RemoteParticipant,
+      _kind?: unknown,
+      topic?: string,
+    ) => {
+      if (topic !== SYNC_TOPIC || !participant) {
+        return;
+      }
+      let msg: SyncMsg;
+      try {
+        msg = JSON.parse(decoder.decode(payload));
+      } catch {
+        return;
+      }
+      const video = videoRef.current;
+      switch (msg.t) {
+        case 'play':
+          if (!video) return;
+          if (Math.abs(video.currentTime - msg.time) > NUDGE_THRESHOLD) {
+            applySeek(video, msg.time);
+          }
+          applyPlay(video);
+          break;
+        case 'pause':
+          if (!video) return;
+          applyPause(video);
+          applySeek(video, msg.time);
+          break;
+        case 'seek':
+          if (!video) return;
+          applySeek(video, msg.time);
+          break;
+        case 'tick': {
+          if (!video || video.paused || msg.paused) return;
+          // Only correct toward the deterministic clock master.
+          if (participant.identity >= room.localParticipant.identity) return;
+          const delta = msg.time - video.currentTime;
+          if (Math.abs(delta) > HARD_SEEK_THRESHOLD) {
+            applySeek(video, msg.time);
+            video.playbackRate = 1;
+          } else if (Math.abs(delta) > NUDGE_THRESHOLD) {
+            // 0.01x per 100ms of drift, clamped — imperceptible correction.
+            video.playbackRate = Math.min(Math.max(1 + delta / 10, 0.9), 1.1);
+          } else {
+            video.playbackRate = 1;
+          }
+          break;
+        }
+        case 'hello':
+          // A participant (re)loaded their file; share our state if we have one.
+          if (video && videoRef.current?.src) {
+            send({ t: 'state', time: video.currentTime, paused: video.paused });
+          }
+          break;
+        case 'state':
+          if (!video) return;
+          applySeek(video, msg.time);
+          if (msg.paused) {
+            applyPause(video);
+          } else {
+            applyPlay(video);
+          }
+          break;
+      }
+    };
+    room.on(RoomEvent.DataReceived, onData);
+    return () => {
+      room.off(RoomEvent.DataReceived, onData);
+    };
+  }, [room, send]);
+
+  // Broadcast a position tick while playing (lossy — fine to drop).
+  React.useEffect(() => {
+    if (!objectUrl) return;
+    const interval = setInterval(() => {
+      const video = videoRef.current;
+      if (!video || video.paused) return;
+      send({ t: 'tick', time: video.currentTime, paused: video.paused }, false);
+    }, TICK_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [objectUrl, send]);
+
+  React.useEffect(() => {
+    return () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [objectUrl]);
+
+  const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+    setObjectUrl(URL.createObjectURL(file));
+    setFileName(file.name);
+    // Ask peers where they are so we join in sync.
+    send({ t: 'hello' });
+  };
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100%',
+        background: '#000',
+        position: 'relative',
+      }}
+    >
+      {objectUrl ? (
+        <>
+          <video
+            ref={videoRef}
+            src={objectUrl}
+            controls
+            playsInline
+            style={{ flex: 1, minHeight: 0, width: '100%', objectFit: 'contain' }}
+            onPlay={() => {
+              const video = videoRef.current;
+              if (video && !consumeExpected('play')) send({ t: 'play', time: video.currentTime });
+            }}
+            onPause={() => {
+              const video = videoRef.current;
+              if (!video || consumeExpected('pause')) return;
+              // Reaching the end pauses naturally — each side ends on its own;
+              // broadcasting it would stomp a peer who just sought elsewhere.
+              if (video.ended || video.seeking) return;
+              send({ t: 'pause', time: video.currentTime });
+            }}
+            onSeeked={() => {
+              const video = videoRef.current;
+              if (video && !consumeExpected('seek')) send({ t: 'seek', time: video.currentTime });
+            }}
+          />
+          <div
+            style={{
+              position: 'absolute',
+              top: 8,
+              left: 8,
+              display: 'flex',
+              gap: 8,
+              alignItems: 'center',
+              background: 'rgba(0,0,0,0.6)',
+              borderRadius: 6,
+              padding: '4px 8px',
+              fontSize: 13,
+              color: '#fff',
+            }}
+          >
+            <span>{fileName}</span>
+            <label style={{ cursor: 'pointer', textDecoration: 'underline' }}>
+              change
+              <input type="file" accept="video/*" onChange={onFileChange} hidden />
+            </label>
+          </div>
+        </>
+      ) : (
+        <div
+          style={{
+            flex: 1,
+            display: 'grid',
+            placeItems: 'center',
+            color: '#fff',
+            textAlign: 'center',
+            padding: 24,
+          }}
+        >
+          <div style={{ display: 'grid', gap: 12, justifyItems: 'center' }}>
+            <h2 style={{ margin: 0 }}>Load your copy of the video</h2>
+            <p style={{ margin: 0, opacity: 0.7, maxWidth: 420 }}>
+              Everyone opens their own local file — nothing is uploaded. Playback stays in sync
+              automatically.
+            </p>
+            <label className="lk-button" style={{ cursor: 'pointer' }}>
+              Choose video file
+              <input type="file" accept="video/*" onChange={onFileChange} hidden />
+            </label>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
