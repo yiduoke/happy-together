@@ -26,6 +26,7 @@ import { useLowCPUOptimizer } from '@/lib/usePerfomanceOptimiser';
 import { WatchTogether } from '@/lib/WatchTogether';
 import { CopyLinkButton } from '@/lib/CopyLinkButton';
 import { Sidebar } from '@/lib/Sidebar';
+import { ResizableSidebar } from '@/lib/ResizableSidebar';
 
 const CONN_DETAILS_ENDPOINT =
   process.env.NEXT_PUBLIC_CONN_DETAILS_ENDPOINT ?? '/api/connection-details';
@@ -229,10 +230,10 @@ function VideoConferenceComponent(props: {
           <WatchTogether />
           <CopyLinkButton />
         </div>
-        {/* Sidebar: webcams, controls, chat */}
-        <div style={{ width: 360, minWidth: 300, display: 'flex', flexDirection: 'column' }}>
+        {/* Sidebar: webcams, controls, chat — resizable + collapsible */}
+        <ResizableSidebar>
           <Sidebar SettingsComponent={SHOW_SETTINGS_MENU ? SettingsMenu : undefined} />
-        </div>
+        </ResizableSidebar>
         <DebugMode />
         <RecordingIndicator />
       </RoomContext.Provider>

@@ -12,7 +12,8 @@ import {
   useCreateLayoutContext,
   useTracks,
 } from '@livekit/components-react';
-import { Chat, ControlBar } from '@livekit/components-react';
+import { Chat, ControlBar, useChat } from '@livekit/components-react';
+import { playDing } from './ding';
 
 /**
  * Conference sidebar built for a narrow column: webcam tiles stacked on top,
@@ -30,6 +31,18 @@ export function Sidebar(props: { SettingsComponent?: React.ComponentType }) {
     showSettings: false,
   });
   const layoutContext = useCreateLayoutContext();
+
+  // Ding on incoming messages (not our own)
+  const { chatMessages } = useChat();
+  const seenCount = React.useRef(0);
+  React.useEffect(() => {
+    const fresh = chatMessages.slice(seenCount.current);
+    seenCount.current = chatMessages.length;
+    if (fresh.some((m) => m.from && !m.from.isLocal)) {
+      playDing();
+    }
+  }, [chatMessages]);
+
   const tracks = useTracks(
     [
       { source: Track.Source.Camera, withPlaceholder: true },
