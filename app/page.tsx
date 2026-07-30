@@ -40,7 +40,7 @@ export default function Page() {
       <div
         style={{
           position: 'absolute',
-          top: '13vw',
+          top: '11.5vw',
           right: '8vw',
           width: 'min(420px, 32vw)',
           textAlign: 'right',
