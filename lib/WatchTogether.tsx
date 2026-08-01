@@ -137,8 +137,8 @@ type SyncMsg =
   | { t: 'pause'; time: number }
   | { t: 'seek'; time: number }
   | { t: 'tick'; time: number; paused: boolean }
-  | { t: 'hello' }
-  | { t: 'state'; time: number; paused: boolean };
+  | { t: 'hello'; file?: string }
+  | { t: 'state'; time: number; paused: boolean; file?: string };
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -254,13 +254,36 @@ export function WatchTogether() {
           break;
         }
         case 'hello':
+          if (msg.file) {
+            const file = msg.file;
+            setPeerFiles((p) => ({
+              ...p,
+              [participant.identity]: { name: participant.name || participant.identity, file },
+            }));
+          }
           // A participant (re)loaded their file; share our state if we have one.
           if (video && videoRef.current?.src) {
-            send({ t: 'state', time: video.currentTime, paused: video.paused });
+            send({
+              t: 'state',
+              time: video.currentTime,
+              paused: video.paused,
+              file: fileNameRef.current ?? undefined,
+            });
           }
           break;
         case 'state':
+          if (msg.file) {
+            const file = msg.file;
+            setPeerFiles((p) => ({
+              ...p,
+              [participant.identity]: { name: participant.name || participant.identity, file },
+            }));
+          }
           if (!video) return;
+          // Only the participant who just asked (loaded a file) adopts the
+          // state — otherwise every join would yank existing watchers around.
+          if (!wantStateRef.current) return;
+          wantStateRef.current = false;
           applySeek(video, msg.time);
           if (msg.paused) {
             applyPause(video);
@@ -275,6 +298,34 @@ export function WatchTogether() {
       room.off(RoomEvent.DataReceived, onData);
     };
   }, [room, send]);
+
+  // On join, ask who's watching what (bare hello — no state adoption).
+  // The component can mount before the room connection is up, so also fire
+  // on Connected — a pre-connection publishData is silently dropped.
+  React.useEffect(() => {
+    const sayHello = () => send({ t: 'hello' });
+    if (room.state === 'connected') sayHello();
+    room.on(RoomEvent.Connected, sayHello);
+    return () => {
+      room.off(RoomEvent.Connected, sayHello);
+    };
+  }, [room, send]);
+
+  // Forget a peer's file when they leave.
+  React.useEffect(() => {
+    const onLeave = (participant: RemoteParticipant) => {
+      setPeerFiles((p) => {
+        if (!(participant.identity in p)) return p;
+        const next = { ...p };
+        delete next[participant.identity];
+        return next;
+      });
+    };
+    room.on(RoomEvent.ParticipantDisconnected, onLeave);
+    return () => {
+      room.off(RoomEvent.ParticipantDisconnected, onLeave);
+    };
+  }, [room]);
 
   // Broadcast a position tick while playing (lossy — fine to drop).
   React.useEffect(() => {
@@ -295,6 +346,14 @@ export function WatchTogether() {
 
   const [subScanPct, setSubScanPct] = React.useState<number | null>(null);
   const [videoError, setVideoError] = React.useState<string | null>(null);
+  // What each peer has loaded, keyed by participant identity.
+  const [peerFiles, setPeerFiles] = React.useState<Record<string, { name: string; file: string }>>(
+    {},
+  );
+  // The data handler's effect closure would go stale on fileName state alone.
+  const fileNameRef = React.useRef<string | null>(null);
+  // True only between "I loaded a file" and "a peer's state arrived".
+  const wantStateRef = React.useRef(false);
   // Bumped on every file change so a stale extraction can't attach its tracks.
   const fileGeneration = React.useRef(0);
 
@@ -310,8 +369,10 @@ export function WatchTogether() {
     setObjectUrl(URL.createObjectURL(file));
     setFileName(file.name);
     setVideoError(null);
-    // Ask peers where they are so we join in sync.
-    send({ t: 'hello' });
+    fileNameRef.current = file.name;
+    wantStateRef.current = true;
+    // Ask peers where they are so we join in sync; tell them what we loaded.
+    send({ t: 'hello', file: file.name });
 
     // Dig embedded subtitle tracks out of the container (MKV/WebM).
     const generation = ++fileGeneration.current;
@@ -439,6 +500,21 @@ export function WatchTogether() {
               </span>
             )}
             <SubtitleSelector videoRef={videoRef} />
+            {Object.entries(peerFiles).map(([id, p]) => (
+              <span
+                key={id}
+                style={{
+                  fontSize: 12,
+                  opacity: 0.7,
+                  maxWidth: 340,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {p.name} is watching: {p.file}
+              </span>
+            ))}
           </div>
         </>
       ) : (
@@ -458,6 +534,11 @@ export function WatchTogether() {
               Everyone opens their own local file — nothing is uploaded. Playback stays in sync
               automatically.
             </p>
+            {Object.entries(peerFiles).map(([id, p]) => (
+              <p key={id} style={{ margin: 0, opacity: 0.85, maxWidth: 420, fontSize: 14 }}>
+                <strong>{p.name}</strong> is watching: {p.file}
+              </p>
+            ))}
             <label className="lk-button" style={{ cursor: 'pointer' }}>
               Choose video file
               <input type="file" accept="video/*,.mkv" onChange={onFileChange} hidden />
