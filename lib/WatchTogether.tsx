@@ -3,6 +3,7 @@
 import React from 'react';
 import { useRoomContext } from '@livekit/components-react';
 import { RoomEvent, RemoteParticipant } from 'livekit-client';
+import { extractEmbeddedSubs } from './extractEmbeddedSubs';
 
 const SYNC_TOPIC = 'watch-sync';
 
@@ -274,14 +275,51 @@ export function WatchTogether() {
     };
   }, [objectUrl]);
 
+  const [subScanPct, setSubScanPct] = React.useState<number | null>(null);
+  // Bumped on every file change so a stale extraction can't attach its tracks.
+  const fileGeneration = React.useRef(0);
+
   const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     if (objectUrl) URL.revokeObjectURL(objectUrl);
+    // Drop tracks that belonged to the previous file.
+    videoRef.current?.querySelectorAll('track').forEach((el) => {
+      URL.revokeObjectURL(el.src);
+      el.remove();
+    });
     setObjectUrl(URL.createObjectURL(file));
     setFileName(file.name);
     // Ask peers where they are so we join in sync.
     send({ t: 'hello' });
+
+    // Dig embedded subtitle tracks out of the container (MKV/WebM).
+    const generation = ++fileGeneration.current;
+    setSubScanPct(null);
+    extractEmbeddedSubs(file, (fraction) => {
+      if (fileGeneration.current !== generation) return;
+      setSubScanPct((prev) => {
+        const pct = Math.round(fraction * 100);
+        return pct === prev ? prev : pct;
+      });
+    })
+      .then((tracks) => {
+        if (fileGeneration.current !== generation) return;
+        setSubScanPct(null);
+        const video = videoRef.current;
+        if (!video) return;
+        for (const t of tracks) {
+          const el = document.createElement('track');
+          el.kind = 'subtitles';
+          el.label = t.label;
+          el.src = t.vttUrl;
+          video.appendChild(el);
+          el.track.mode = 'disabled';
+        }
+      })
+      .catch(() => {
+        if (fileGeneration.current === generation) setSubScanPct(null);
+      });
   };
 
   return (
@@ -338,9 +376,14 @@ export function WatchTogether() {
               <span>{fileName}</span>
               <label style={{ cursor: 'pointer', textDecoration: 'underline' }}>
                 change
-                <input type="file" accept="video/*" onChange={onFileChange} hidden />
+                <input type="file" accept="video/*,.mkv" onChange={onFileChange} hidden />
               </label>
             </div>
+            {subScanPct !== null && (
+              <span style={{ fontSize: 12, opacity: 0.7 }}>
+                scanning embedded subtitles… {subScanPct}%
+              </span>
+            )}
             <SubtitleSelector videoRef={videoRef} />
           </div>
         </>
@@ -363,7 +406,7 @@ export function WatchTogether() {
             </p>
             <label className="lk-button" style={{ cursor: 'pointer' }}>
               Choose video file
-              <input type="file" accept="video/*" onChange={onFileChange} hidden />
+              <input type="file" accept="video/*,.mkv" onChange={onFileChange} hidden />
             </label>
           </div>
         </div>

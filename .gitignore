@@ -40,3 +40,4 @@ yarn-error.log*
 # local test asset
 public/test-sample.mp4
 public/subs-test.mp4
+public/subs-test.mkv
