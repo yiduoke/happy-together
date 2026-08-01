@@ -5,6 +5,109 @@ import { useRoomContext } from '@livekit/components-react';
 import { RoomEvent, RemoteParticipant } from 'livekit-client';
 
 const SYNC_TOPIC = 'watch-sync';
+
+// Browsers don't demux subtitle tracks embedded in local MP4/MKV files, so
+// tracks arrive as sidecar .srt/.vtt files added as <track> elements.
+function srtToVtt(srt: string) {
+  return (
+    'WEBVTT\n\n' +
+    srt.replace(/\r/g, '').replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2')
+  );
+}
+
+function SubtitleSelector(props: { videoRef: React.RefObject<HTMLVideoElement> }) {
+  const [tracks, setTracks] = React.useState<Array<{ index: number; label: string }>>([]);
+  const [selected, setSelected] = React.useState<Set<number>>(new Set());
+
+  const onSubtitleFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const video = props.videoRef.current;
+    const files = e.target.files;
+    if (!video || !files) return;
+    for (const file of Array.from(files)) {
+      const text = await file.text();
+      const vtt = file.name.toLowerCase().endsWith('.vtt') ? text : srtToVtt(text);
+      const track = document.createElement('track');
+      track.kind = 'subtitles';
+      track.label = file.name.replace(/\.(srt|vtt)$/i, '');
+      track.src = URL.createObjectURL(new Blob([vtt], { type: 'text/vtt' }));
+      video.appendChild(track);
+      track.track.mode = 'disabled';
+    }
+    e.target.value = '';
+  };
+
+  React.useEffect(() => {
+    const video = props.videoRef.current;
+    if (!video) return;
+    const list = video.textTracks;
+    const updateTracks = () => {
+      setTracks(
+        Array.from(list).map((track, i) => ({
+          index: i,
+          label: track.label || [track.language, `Subtitle ${i + 1}`].filter(Boolean).join(' — '),
+        })),
+      );
+    };
+    const reset = () => {
+      setSelected(new Set());
+      updateTracks();
+    };
+    updateTracks();
+    list.addEventListener('addtrack', updateTracks);
+    list.addEventListener('removetrack', updateTracks);
+    video.addEventListener('loadedmetadata', reset);
+    return () => {
+      list.removeEventListener('addtrack', updateTracks);
+      list.removeEventListener('removetrack', updateTracks);
+      video.removeEventListener('loadedmetadata', reset);
+    };
+  }, [props.videoRef]);
+
+  const toggle = (index: number) => {
+    const video = props.videoRef.current;
+    const track = video?.textTracks[index];
+    if (!track) return;
+    const next = new Set(selected);
+    if (next.has(index)) {
+      next.delete(index);
+      track.mode = 'disabled';
+    } else {
+      next.add(index);
+      track.mode = 'showing';
+    }
+    setSelected(next);
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {tracks.map((track) => (
+        <label
+          key={track.index}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            cursor: 'pointer',
+            fontSize: 12,
+            lineHeight: 1,
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={selected.has(track.index)}
+            onChange={() => toggle(track.index)}
+            style={{ cursor: 'pointer' }}
+          />
+          <span>{track.label}</span>
+        </label>
+      ))}
+      <label style={{ cursor: 'pointer', textDecoration: 'underline', fontSize: 12 }}>
+        add subtitles (.srt / .vtt)
+        <input type="file" accept=".srt,.vtt" multiple onChange={onSubtitleFiles} hidden />
+      </label>
+    </div>
+  );
+}
 const TICK_INTERVAL_MS = 2000;
 // Drift thresholds (seconds)
 const HARD_SEEK_THRESHOLD = 3;
@@ -222,20 +325,23 @@ export function WatchTogether() {
               top: 8,
               left: 8,
               display: 'flex',
-              gap: 8,
-              alignItems: 'center',
+              flexDirection: 'column',
+              gap: 6,
               background: 'rgba(0,0,0,0.6)',
               borderRadius: 6,
-              padding: '4px 8px',
+              padding: '8px',
               fontSize: 13,
               color: '#fff',
             }}
           >
-            <span>{fileName}</span>
-            <label style={{ cursor: 'pointer', textDecoration: 'underline' }}>
-              change
-              <input type="file" accept="video/*" onChange={onFileChange} hidden />
-            </label>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span>{fileName}</span>
+              <label style={{ cursor: 'pointer', textDecoration: 'underline' }}>
+                change
+                <input type="file" accept="video/*" onChange={onFileChange} hidden />
+              </label>
+            </div>
+            <SubtitleSelector videoRef={videoRef} />
           </div>
         </>
       ) : (
