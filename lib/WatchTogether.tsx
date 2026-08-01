@@ -294,6 +294,7 @@ export function WatchTogether() {
   }, [objectUrl]);
 
   const [subScanPct, setSubScanPct] = React.useState<number | null>(null);
+  const [videoError, setVideoError] = React.useState<string | null>(null);
   // Bumped on every file change so a stale extraction can't attach its tracks.
   const fileGeneration = React.useRef(0);
 
@@ -308,6 +309,7 @@ export function WatchTogether() {
     });
     setObjectUrl(URL.createObjectURL(file));
     setFileName(file.name);
+    setVideoError(null);
     // Ask peers where they are so we join in sync.
     send({ t: 'hello' });
 
@@ -374,7 +376,41 @@ export function WatchTogether() {
               const video = videoRef.current;
               if (video && !consumeExpected('seek')) send({ t: 'seek', time: video.currentTime });
             }}
+            onLoadedData={() => setVideoError(null)}
+            onError={() => {
+              const err = videoRef.current?.error;
+              setVideoError(
+                err?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED
+                  ? 'This file/codec can’t be played by the browser.'
+                  : `Video failed to load (code ${err?.code ?? '?'}).`,
+              );
+            }}
           />
+          {videoError && (
+            <div
+              style={{
+                position: 'absolute',
+                inset: 0,
+                display: 'grid',
+                placeItems: 'center',
+                color: '#fff',
+                background: 'rgba(0,0,0,0.7)',
+                textAlign: 'center',
+                padding: 24,
+              }}
+            >
+              <div>
+                <p style={{ margin: 0 }}>{videoError}</p>
+                <label
+                  className="lk-button"
+                  style={{ cursor: 'pointer', marginTop: 12, display: 'inline-block' }}
+                >
+                  Re-pick video file
+                  <input type="file" accept="video/*,.mkv" onChange={onFileChange} hidden />
+                </label>
+              </div>
+            </div>
+          )}
           <div
             style={{
               position: 'absolute',
