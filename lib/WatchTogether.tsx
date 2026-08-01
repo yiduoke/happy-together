@@ -79,9 +79,25 @@ function SubtitleSelector(props: { videoRef: React.RefObject<HTMLVideoElement> }
     setSelected(next);
   };
 
+  const [open, setOpen] = React.useState(false);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      {tracks.map((track) => (
+      <button
+        onClick={() => setOpen((o) => !o)}
+        style={{
+          background: 'none',
+          border: 'none',
+          color: '#fff',
+          cursor: 'pointer',
+          padding: 0,
+          fontSize: 12,
+          textAlign: 'left',
+        }}
+      >
+        {open ? '▾' : '▸'} subtitles{selected.size > 0 ? ` (${selected.size} on)` : ''}
+      </button>
+      {open && tracks.map((track) => (
         <label
           key={track.index}
           style={{
@@ -102,10 +118,12 @@ function SubtitleSelector(props: { videoRef: React.RefObject<HTMLVideoElement> }
           <span>{track.label}</span>
         </label>
       ))}
-      <label style={{ cursor: 'pointer', textDecoration: 'underline', fontSize: 12 }}>
-        add subtitles (.srt / .vtt)
-        <input type="file" accept=".srt,.vtt" multiple onChange={onSubtitleFiles} hidden />
-      </label>
+      {open && (
+        <label style={{ cursor: 'pointer', textDecoration: 'underline', fontSize: 12 }}>
+          add subtitles (.srt / .vtt)
+          <input type="file" accept=".srt,.vtt" multiple onChange={onSubtitleFiles} hidden />
+        </label>
+      )}
     </div>
   );
 }
