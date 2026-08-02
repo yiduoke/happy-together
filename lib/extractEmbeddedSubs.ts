@@ -68,7 +68,7 @@ export async function extractEmbeddedSubs(
 
     parser.on(
       'subtitle',
-      (sub: { text: string; time: number; duration: number }, trackNumber: number) => {
+      (sub: { text: string; time: number; duration?: number }, trackNumber: number) => {
         cuesByTrack.get(trackNumber)?.push({
           start: sub.time,
           end: sub.time + (sub.duration ?? 3000),
