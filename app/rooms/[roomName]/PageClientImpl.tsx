@@ -67,6 +67,22 @@ export function PageClientImpl(props: {
   }, []);
   const handlePreJoinError = React.useCallback((e: any) => console.error(e), []);
 
+  // Dev-only test harness: ?autojoin=<name> skips the PreJoin form (mic/cam
+  // off) so browsers we can't click-drive (Firefox) can be tested by URL.
+  React.useEffect(() => {
+    if (process.env.NODE_ENV !== 'development') return;
+    const name = new URLSearchParams(window.location.search).get('autojoin');
+    if (name) {
+      handlePreJoinSubmit({
+        username: name,
+        videoEnabled: false,
+        audioEnabled: false,
+        videoDeviceId: '',
+        audioDeviceId: '',
+      });
+    }
+  }, [handlePreJoinSubmit]);
+
   return (
     <main data-lk-theme="default" style={{ height: '100%' }}>
       {connectionDetails === undefined || preJoinChoices === undefined ? (

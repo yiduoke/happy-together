@@ -41,3 +41,8 @@ yarn-error.log*
 public/test-sample.mp4
 public/subs-test.mp4
 public/subs-test.mkv
+public/subs-ac3.mkv
+public/subs-aac.mkv
+public/subs-eac3.mkv
+public/test-aac.mp4
+public/test-opus.webm

@@ -4,6 +4,7 @@ import React from 'react';
 import { useRoomContext } from '@livekit/components-react';
 import { RoomEvent, RemoteParticipant } from 'livekit-client';
 import { extractEmbeddedSubs } from './extractEmbeddedSubs';
+import { DiagOverlay } from './DiagOverlay';
 
 const SYNC_TOPIC = 'watch-sync';
 
@@ -357,9 +358,7 @@ export function WatchTogether() {
   // Bumped on every file change so a stale extraction can't attach its tracks.
   const fileGeneration = React.useRef(0);
 
-  const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const loadFile = (file: File) => {
     if (objectUrl) URL.revokeObjectURL(objectUrl);
     // Drop tracks that belonged to the previous file.
     videoRef.current?.querySelectorAll('track').forEach((el) => {
@@ -403,6 +402,29 @@ export function WatchTogether() {
       });
   };
 
+  const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) loadFile(file);
+  };
+
+  // Dev-only test harness: ?autofile=<same-origin path> loads a file without
+  // the picker, so URL-only-drivable browsers (Firefox) can be tested.
+  const autoFileLoaded = React.useRef(false);
+  const devAutoplay = React.useRef(false);
+  React.useEffect(() => {
+    if (process.env.NODE_ENV !== 'development' || autoFileLoaded.current) return;
+    const params = new URLSearchParams(window.location.search);
+    devAutoplay.current = params.has('autoplay');
+    const path = params.get('autofile');
+    if (!path || !path.startsWith('/')) return;
+    autoFileLoaded.current = true;
+    fetch(path)
+      .then((r) => r.blob())
+      .then((blob) => loadFile(new File([blob], path.split('/').pop() || 'video', { type: blob.type })))
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
     <div
       style={{
@@ -438,6 +460,12 @@ export function WatchTogether() {
               if (video && !consumeExpected('seek')) send({ t: 'seek', time: video.currentTime });
             }}
             onLoadedData={() => setVideoError(null)}
+            onCanPlay={() => {
+              if (process.env.NODE_ENV === 'development' && devAutoplay.current) {
+                devAutoplay.current = false;
+                videoRef.current?.play().catch(() => {});
+              }
+            }}
             onError={() => {
               const err = videoRef.current?.error;
               setVideoError(
@@ -447,6 +475,11 @@ export function WatchTogether() {
               );
             }}
           />
+          {process.env.NODE_ENV === 'development' &&
+            typeof window !== 'undefined' &&
+            new URLSearchParams(window.location.search).has('diag') && (
+              <DiagOverlay videoRef={videoRef} />
+            )}
           {videoError && (
             <div
               style={{
