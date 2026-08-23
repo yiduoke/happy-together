@@ -5,6 +5,7 @@ import { useRoomContext } from '@livekit/components-react';
 import { RoomEvent, RemoteParticipant } from 'livekit-client';
 import { extractEmbeddedSubs } from './extractEmbeddedSubs';
 import { DiagOverlay } from './DiagOverlay';
+import { CastButton } from './CastButton';
 
 const SYNC_TOPIC = 'watch-sync';
 
@@ -533,6 +534,7 @@ export function WatchTogether() {
               </span>
             )}
             <SubtitleSelector videoRef={videoRef} />
+            <CastButton videoRef={videoRef} />
             {Object.entries(peerFiles).map(([id, p]) => (
               <span
                 key={id}

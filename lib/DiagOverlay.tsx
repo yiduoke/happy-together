@@ -13,7 +13,7 @@ export function DiagOverlay(props: { videoRef: React.RefObject<HTMLVideoElement>
   const [stats, setStats] = React.useState<Record<string, string>>({});
   const probe = React.useRef<{
     analyser: AnalyserNode;
-    buf: Float32Array;
+    buf: Float32Array<ArrayBuffer>;
     dropouts: number;
     wasSilent: boolean;
   } | null>(null);
