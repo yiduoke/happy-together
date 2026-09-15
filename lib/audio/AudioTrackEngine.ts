@@ -3,6 +3,7 @@
 import type { AudioContainer, AudioTrackInfo, EncodedAudioFrame } from './types';
 import { demuxMkvAudioTrack } from './mkvAudioDemux';
 import { demuxMp4AudioTrack } from './mp4AudioDemux';
+import { WasmAudioDecoder, needsWasm } from './wasmDecoder';
 
 // Media seconds decoded and scheduled ahead of the playhead. Small on purpose:
 // frames already scheduled can't follow a later playbackRate change exactly.
@@ -18,7 +19,12 @@ const RESYNC_THRESHOLD = 0.12;
 const FIRST_CHECK_THRESHOLD = 0.06;
 const TICK_MS = 50;
 
-export type EngineStatus = 'starting' | 'playing' | 'stopped' | 'error';
+export type EngineStatus = 'loading-decoder' | 'starting' | 'playing' | 'stopped' | 'error';
+
+// Media seconds of compressed frames handed to the WASM decoder per call.
+// Large enough that ffmpeg's per-invocation overhead is negligible, small
+// enough that a seek doesn't waste much work.
+const WASM_BATCH_SECONDS = 5;
 
 /**
  * Plays one alternate audio track of a local file in lockstep with the
@@ -35,6 +41,9 @@ export class AudioTrackEngine {
   private gain: GainNode | null = null;
   private decoder: AudioDecoder | null = null;
   private decoderConfig: AudioDecoderConfig | null = null;
+  private wasm: WasmAudioDecoder | null = null;
+  private wasmBatch: EncodedAudioFrame[] = [];
+  private wasmBusy = false;
   private abort: AbortController | null = null;
   private sources = new Set<AudioBufferSourceNode>();
   private queue: EncodedAudioFrame[] = [];
@@ -71,18 +80,34 @@ export class AudioTrackEngine {
     this.container = container;
     this.track = track;
 
-    this.decoderConfig = {
-      codec: track.codec === 'aac' ? 'mp4a.40.2' : 'opus',
-      sampleRate: track.sampleRate,
-      numberOfChannels: track.channels,
-      description: track.description,
-    };
-    try {
-      const support = await AudioDecoder.isConfigSupported(this.decoderConfig);
-      if (!support.supported) throw new Error('unsupported');
-    } catch {
-      this.onStatus('error', `${track.codecName} isn't decodable in this browser`);
-      return;
+    if (needsWasm(track.codec)) {
+      // No browser ships these decoders; fall back to ffmpeg-in-WASM.
+      this.onStatus('loading-decoder');
+      this.wasm = new WasmAudioDecoder(track.codec, track.channels, track.sampleRate);
+      try {
+        await this.wasm.init();
+      } catch (e) {
+        this.wasm = null;
+        const why = e instanceof Error ? `: ${e.message}` : '';
+        this.onStatus('error', `couldn't load the ${track.codecName} decoder${why}`);
+        return;
+      }
+      if (this.track !== track) return; // superseded while loading
+      this.decoderConfig = null;
+    } else {
+      this.decoderConfig = {
+        codec: track.codec === 'aac' ? 'mp4a.40.2' : 'opus',
+        sampleRate: track.sampleRate,
+        numberOfChannels: track.channels,
+        description: track.description,
+      };
+      try {
+        const support = await AudioDecoder.isConfigSupported(this.decoderConfig);
+        if (!support.supported) throw new Error('unsupported');
+      } catch {
+        this.onStatus('error', `${track.codecName} isn't decodable in this browser`);
+        return;
+      }
     }
 
     this.ctx = new AudioContext({ sampleRate: track.sampleRate });
@@ -123,6 +148,9 @@ export class AudioTrackEngine {
       }
       this.decoder = null;
     }
+    this.wasm = null;
+    this.wasmBatch.length = 0;
+    this.wasmBusy = false;
     if (this.ctx) {
       this.ctx.close().catch(() => {});
       this.ctx = null;
@@ -139,7 +167,8 @@ export class AudioTrackEngine {
   // --- pipeline -----------------------------------------------------------
 
   private resync(fromMedia: number) {
-    if (!this.ctx || !this.file || !this.track || !this.decoderConfig) return;
+    if (!this.ctx || !this.file || !this.track) return;
+    if (!this.decoderConfig && !this.wasm) return;
 
     this.abort?.abort();
     this.abort = new AbortController();
@@ -153,12 +182,17 @@ export class AudioTrackEngine {
       } catch {
         // ignore
       }
+      this.decoder = null;
     }
-    this.decoder = new AudioDecoder({
-      output: this.onDecoded,
-      error: (e) => this.fail(e.message),
-    });
-    this.decoder.configure(this.decoderConfig);
+    if (this.decoderConfig) {
+      this.decoder = new AudioDecoder({
+        output: this.onDecoded,
+        error: (e) => this.fail(e.message),
+      });
+      this.decoder.configure(this.decoderConfig);
+    }
+    this.wasmBatch.length = 0;
+    this.wasmBusy = false;
 
     this.rate = this.video.playbackRate || 1;
     this.anchorCtx = this.ctx.currentTime;
@@ -190,14 +224,28 @@ export class AudioTrackEngine {
 
   private tick = () => {
     const ctx = this.ctx;
-    const decoder = this.decoder;
-    if (!ctx || !decoder) return;
+    if (!ctx || (!this.decoder && !this.wasm)) return;
 
     const shouldRun = !this.video.paused && !this.video.seeking && !this.video.ended;
     if (shouldRun && ctx.state === 'suspended') ctx.resume().catch(() => {});
     else if (!shouldRun && ctx.state === 'running') ctx.suspend().catch(() => {});
 
     const nowMedia = this.expectedMedia();
+    if (this.wasm) this.pumpWasm(nowMedia);
+    else this.pumpWebCodecs(nowMedia);
+
+    if (shouldRun && ++this.driftCounter % 10 === 0) {
+      const drift = this.video.currentTime - nowMedia;
+      const threshold = this.checkedSinceResync ? RESYNC_THRESHOLD : FIRST_CHECK_THRESHOLD;
+      this.checkedSinceResync = true;
+      if (Math.abs(drift) > threshold) this.resync(this.video.currentTime);
+    }
+  };
+
+  /** WebCodecs path: one compressed frame in, one AudioData out. */
+  private pumpWebCodecs(nowMedia: number) {
+    const decoder = this.decoder;
+    if (!decoder) return;
     while (
       this.queue.length > 0 &&
       this.decodedUntil < nowMedia + LOOKAHEAD &&
@@ -221,19 +269,49 @@ export class AudioTrackEngine {
       }
       this.decodedUntil = f.timestamp + f.duration;
     }
+  }
 
-    if (shouldRun && ++this.driftCounter % 10 === 0) {
-      const drift = this.video.currentTime - nowMedia;
-      const threshold = this.checkedSinceResync ? RESYNC_THRESHOLD : FIRST_CHECK_THRESHOLD;
-      this.checkedSinceResync = true;
-      if (Math.abs(drift) > threshold) this.resync(this.video.currentTime);
+  /**
+   * WASM path: ffmpeg decodes a batch at a time, so gather WASM_BATCH_SECONDS
+   * of frames and hand them over as one elementary stream.
+   */
+  private pumpWasm(nowMedia: number) {
+    if (this.wasmBusy || this.decodedUntil >= nowMedia + LOOKAHEAD) return;
+
+    while (this.queue.length > 0) {
+      const batchStart = this.wasmBatch[0]?.timestamp;
+      const next = this.queue[0];
+      if (batchStart !== undefined && next.timestamp - batchStart >= WASM_BATCH_SECONDS) break;
+      this.wasmBatch.push(this.queue.shift()!);
+      this.releaseWaiters();
     }
-  };
+    const batch = this.wasmBatch;
+    const first = batch[0];
+    if (!first) return;
+    const span = batch[batch.length - 1].timestamp + batch[batch.length - 1].duration - first.timestamp;
+    // Wait for a full batch unless the demuxer has run dry (end of file).
+    if (span < WASM_BATCH_SECONDS && this.queue.length > 0) return;
+
+    this.wasmBatch = [];
+    this.wasmBusy = true;
+    const decoder = this.wasm;
+    const generation = this.abort;
+    decoder!
+      .decode(batch)
+      .then((pcm) => {
+        this.wasmBusy = false;
+        // A resync while decoding invalidates this batch.
+        if (!pcm || this.abort !== generation) return;
+        this.schedulePcm(pcm.channelData, pcm.sampleRate, first.timestamp);
+      })
+      .catch(() => {
+        this.wasmBusy = false;
+      });
+    this.decodedUntil = first.timestamp + span;
+  }
 
   private onDecoded = (data: AudioData) => {
-    const ctx = this.ctx;
-    const gain = this.gain;
-    if (!ctx || !gain) {
+    if (!this.ctx || !this.gain) {
       data.close();
       return;
     }
@@ -242,14 +320,26 @@ export class AudioTrackEngine {
       data.close();
       return;
     }
-
-    const buffer = ctx.createBuffer(data.numberOfChannels, data.numberOfFrames, data.sampleRate);
+    const channelData: Float32Array<ArrayBuffer>[] = [];
     for (let ch = 0; ch < data.numberOfChannels; ch++) {
       const plane = new Float32Array(data.numberOfFrames);
       data.copyTo(plane, { planeIndex: ch, format: 'f32-planar' });
-      buffer.copyToChannel(plane, ch);
+      channelData.push(plane);
     }
+    const rate = data.sampleRate;
     data.close();
+    this.schedulePcm(channelData, rate, ts);
+  };
+
+  /** Hand decoded PCM to Web Audio, positioned by the anchor mapping. */
+  private schedulePcm(channelData: Float32Array<ArrayBuffer>[], sampleRate: number, ts: number) {
+    const ctx = this.ctx;
+    const gain = this.gain;
+    if (!ctx || !gain || channelData.length === 0) return;
+    if (ts < this.minAcceptedTs) return;
+
+    const buffer = ctx.createBuffer(channelData.length, channelData[0].length, sampleRate);
+    for (let ch = 0; ch < channelData.length; ch++) buffer.copyToChannel(channelData[ch], ch);
 
     const startAt = this.anchorCtx + (ts - this.anchorMedia) / this.rate;
     const now = ctx.currentTime;
@@ -275,7 +365,7 @@ export class AudioTrackEngine {
       this.gotFirstOutput = true;
       this.onStatus('playing');
     }
-  };
+  }
 
   // --- video mirroring ----------------------------------------------------
 

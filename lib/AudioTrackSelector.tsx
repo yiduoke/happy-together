@@ -4,6 +4,7 @@ import React from 'react';
 import type { AudioTrackInfo } from './audio/types';
 import { containerOf } from './audio/types';
 import { AudioTrackEngine, type EngineStatus } from './audio/AudioTrackEngine';
+import { needsWasm } from './audio/wasmDecoder';
 
 /**
  * Pick which embedded audio track plays. The first track is what the browser
@@ -53,9 +54,17 @@ export function AudioTrackSelector(props: {
     };
   }, [props.file, container]);
 
+  // The element decodes the first track by itself — unless its codec is one
+  // browsers refuse, in which case even "original" has to go through us.
+  const needsEngine = (track: AudioTrackInfo) =>
+    track.id !== tracks[0]?.id || (!!track.codec && needsWasm(track.codec));
+
   const choose = (track: AudioTrackInfo) => {
     const video = props.videoRef.current;
-    if (!video || !props.file || !container || track.id === selected) return;
+    if (!video || !props.file || !container || !track.codec) return;
+    // Re-picking the already-selected track is a retry, not a no-op: it is how
+    // you start the decoder for a first track that needs one.
+    if (track.id === selected && status.s !== 'stopped') return;
     setSelected(track.id);
     if (!engine.current) {
       engine.current = new AudioTrackEngine(video, (s, detail) => setStatus({ s, detail }));
@@ -63,21 +72,31 @@ export function AudioTrackSelector(props: {
         (window as unknown as { __audioEngine?: AudioTrackEngine }).__audioEngine = engine.current;
       }
     }
-    if (track.id === tracks[0].id) {
-      engine.current.stop();
-    } else {
+    if (needsEngine(track)) {
       engine.current.start(props.file, container, track);
+    } else {
+      engine.current.stop();
     }
   };
 
-  if (tracks.length < 2) return null;
+  // A single track still needs the picker when only our bundled decoder can
+  // play it — otherwise the viewer gets silence with no way to turn it on.
+  const anyNeedsDecoder = tracks.some((t) => t.codec && needsWasm(t.codec));
+  if (tracks.length < 2 && !anyNeedsDecoder) return null;
 
-  const statusLine =
-    status.s === 'starting'
-      ? 'switching…'
-      : status.s === 'error'
-        ? `couldn't play: ${status.detail ?? 'unknown error'}`
-        : null;
+  const selectedTrack = tracks.find((t) => t.id === selected);
+  const needsClickToStart =
+    status.s === 'stopped' && !!selectedTrack?.codec && needsWasm(selectedTrack.codec);
+
+  const statusLine = needsClickToStart
+    ? `${selectedTrack!.codecName} needs the bundled decoder — click it to enable sound`
+    : status.s === 'loading-decoder'
+      ? 'loading decoder (one-time, ~31 MB)…'
+      : status.s === 'starting'
+        ? 'switching…'
+        : status.s === 'error'
+          ? `couldn't play: ${status.detail ?? 'unknown error'}`
+          : null;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -93,7 +112,7 @@ export function AudioTrackSelector(props: {
           textAlign: 'left',
         }}
       >
-        {open ? '▾' : '▸'} audio ({tracks.length} tracks)
+        {open ? '▾' : '▸'} audio ({tracks.length} track{tracks.length === 1 ? '' : 's'})
       </button>
       {open &&
         tracks.map((track, i) => {
@@ -110,7 +129,13 @@ export function AudioTrackSelector(props: {
                 lineHeight: 1,
                 opacity: disabled ? 0.5 : 1,
               }}
-              title={disabled ? `${track.codecName} can't be decoded by this browser` : undefined}
+              title={
+                disabled
+                  ? `${track.codecName} can't be decoded by anything we can ship`
+                  : needsWasm(track.codec!)
+                    ? `${track.codecName}: decoded by the bundled ffmpeg build`
+                    : undefined
+              }
             >
               {/* Radio, not checkbox: only one audio track plays at a time. */}
               <input
@@ -119,12 +144,14 @@ export function AudioTrackSelector(props: {
                 checked={selected === track.id}
                 disabled={disabled}
                 onChange={() => choose(track)}
+                onClick={() => choose(track)}
                 style={{ cursor: disabled ? 'not-allowed' : 'pointer' }}
               />
               <span>
                 {track.label}
                 {i === 0 ? ' (original)' : ''}
                 {disabled ? ` — ${track.codecName}, not playable` : ''}
+                {!disabled && needsWasm(track.codec!) ? ` — ${track.codecName}` : ''}
               </span>
             </label>
           );
