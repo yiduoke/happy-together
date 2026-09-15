@@ -6,6 +6,7 @@ import { RoomEvent, RemoteParticipant } from 'livekit-client';
 import { extractEmbeddedSubs } from './extractEmbeddedSubs';
 import { DiagOverlay } from './DiagOverlay';
 import { CastButton } from './CastButton';
+import { AudioTrackSelector } from './AudioTrackSelector';
 
 const SYNC_TOPIC = 'watch-sync';
 
@@ -161,6 +162,7 @@ export function WatchTogether() {
   const room = useRoomContext();
   const videoRef = React.useRef<HTMLVideoElement | null>(null);
   const [fileName, setFileName] = React.useState<string | null>(null);
+  const [file, setFile] = React.useState<File | null>(null);
   const [objectUrl, setObjectUrl] = React.useState<string | null>(null);
   // Applying a remote action fires the same video events as a local user
   // action would. Each programmatic apply registers an expectation; the
@@ -368,6 +370,7 @@ export function WatchTogether() {
     });
     setObjectUrl(URL.createObjectURL(file));
     setFileName(file.name);
+    setFile(file);
     setVideoError(null);
     fileNameRef.current = file.name;
     wantStateRef.current = true;
@@ -534,6 +537,7 @@ export function WatchTogether() {
               </span>
             )}
             <SubtitleSelector videoRef={videoRef} />
+            <AudioTrackSelector file={file} videoRef={videoRef} />
             <CastButton videoRef={videoRef} />
             {Object.entries(peerFiles).map(([id, p]) => (
               <span
