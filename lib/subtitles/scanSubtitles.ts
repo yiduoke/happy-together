@@ -161,19 +161,14 @@ export async function scanSubtitles(
   decoder.on('close', markClosed);
   decoder.on('error', markClosed);
 
+  const TERMINAL = ['drain', 'close', 'finish', 'error', 'end'] as const;
   const waitForCapacity = () =>
     new Promise<void>((resolve) => {
       const settle = () => {
-        decoder.off('drain', settle);
-        decoder.off('finish', settle);
-        decoder.off('close', settle);
-        decoder.off('error', settle);
+        for (const e of TERMINAL) decoder.removeListener(e, settle);
         resolve();
       };
-      decoder.once('drain', settle);
-      decoder.once('finish', settle);
-      decoder.once('close', settle);
-      decoder.once('error', settle);
+      for (const e of TERMINAL) decoder.once(e, settle);
     });
 
   const reader = file.stream().getReader();
@@ -186,7 +181,9 @@ export async function scanSubtitles(
       if (done) break;
       read += value.byteLength;
       onProgress?.(read / file.size);
-      if (!decoder.write(value)) await waitForCapacity();
+      // Never wait on a parser that has already ended: its terminal events
+      // have fired and a fresh listener would hang forever.
+      if (!decoder.write(value) && !closed) await waitForCapacity();
     }
   } catch {
     // Keep whatever was collected before the failure.
