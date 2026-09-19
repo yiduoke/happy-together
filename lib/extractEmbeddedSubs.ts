@@ -88,6 +88,25 @@ export async function extractEmbeddedSubs(
       );
     };
 
+    // matroska-subtitles ends its own parser as soon as the header shows no
+    // text tracks (a disc rip carrying only image-based VobSub/PGS, say).
+    const parserDone = () => sawTracks && cuesByTrack.size === 0;
+
+    // Waiting on 'drain' alone deadlocks once the parser has ended, because
+    // an ended stream never drains: resolve on any terminal event too.
+    const waitForCapacity = () =>
+      new Promise<void>((resolve) => {
+        const settle = () => {
+          for (const e of ['drain', 'close', 'finish', 'error', 'end']) {
+            parser.removeListener(e, settle);
+          }
+          resolve();
+        };
+        for (const e of ['drain', 'close', 'finish', 'error', 'end']) {
+          parser.once(e, settle);
+        }
+      });
+
     try {
       const reader = file.stream().getReader();
       let read = 0;
@@ -98,13 +117,17 @@ export async function extractEmbeddedSubs(
         onProgress?.(read / file.size);
         // The parser is a node-style Writable; respect backpressure so we
         // don't buffer the whole movie in memory.
-        if (!parser.write(value)) {
-          await new Promise((r) => parser.once('drain', r));
+        if (!parser.write(value) && !parserDone()) {
+          await waitForCapacity();
         }
         // A file with no subtitle tracks declared: bail after the header.
-        if (sawTracks && cuesByTrack.size === 0) break;
+        if (parserDone()) break;
       }
-      parser.end();
+      try {
+        parser.end();
+      } catch {
+        // Already ended by the parser itself.
+      }
       finish();
     } catch {
       finish();
