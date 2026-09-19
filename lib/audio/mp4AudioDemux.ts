@@ -9,15 +9,14 @@ const CHUNK_SIZE = 1024 * 1024;
 function codecFromMp4(codec: string): { codec: AudioTrackInfo['codec']; name: string } {
   if (codec.startsWith('mp4a.40')) return { codec: 'aac', name: 'AAC' };
   if (codec.toLowerCase().startsWith('opus')) return { codec: 'opus', name: 'Opus' };
-  // Decoded by the bundled ffmpeg WASM build, not by the browser.
-  if (codec === 'ac-3') return { codec: 'ac3', name: 'AC3' };
-  if (codec === 'ec-3') return { codec: 'eac3', name: 'E-AC3' };
-  if (codec.startsWith('dts') || codec === 'dtsc') return { codec: 'dts', name: 'DTS' };
   const known: Record<string, string> = {
+    'ac-3': 'AC3',
+    'ec-3': 'E-AC3',
     'mp4a.6b': 'MP3',
     'mp4a.69': 'MP3',
     alac: 'ALAC',
     flac: 'FLAC',
+    dtsc: 'DTS',
   };
   return { codec: null, name: known[codec] ?? codec };
 }

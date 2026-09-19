@@ -1,12 +1,12 @@
 export type AudioContainer = 'mp4' | 'mkv';
 
-export type AudioCodecId = 'aac' | 'opus' | 'ac3' | 'eac3' | 'dts' | 'truehd';
+export type AudioCodecId = 'aac' | 'opus';
 
 export interface AudioTrackInfo {
   /** Track id inside its container (MP4 track_id / Matroska TrackNumber). */
   id: number;
   label: string;
-  /** Null when nothing we ship can decode this codec — shown but not selectable. */
+  /** Null when the browser can't decode this codec — shown but not selectable. */
   codec: AudioCodecId | null;
   /** Human-readable codec name, for the "unsupported" hint. */
   codecName: string;
