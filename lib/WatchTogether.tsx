@@ -3,7 +3,8 @@
 import React from 'react';
 import { useRoomContext } from '@livekit/components-react';
 import { RoomEvent, RemoteParticipant } from 'livekit-client';
-import { extractEmbeddedSubs } from './extractEmbeddedSubs';
+import { scanSubtitles, type BitmapSubTrack } from './subtitles/scanSubtitles';
+import { BitmapSubtitleOverlay } from './BitmapSubtitleOverlay';
 import { DiagOverlay } from './DiagOverlay';
 import { CastButton } from './CastButton';
 
@@ -18,9 +19,28 @@ function srtToVtt(srt: string) {
   );
 }
 
-function SubtitleSelector(props: { videoRef: React.RefObject<HTMLVideoElement> }) {
+function SubtitleSelector(props: {
+  videoRef: React.RefObject<HTMLVideoElement>;
+  bitmapTracks: BitmapSubTrack[];
+  onBitmapSelectionChange: (tracks: BitmapSubTrack[]) => void;
+}) {
   const [tracks, setTracks] = React.useState<Array<{ index: number; label: string }>>([]);
   const [selected, setSelected] = React.useState<Set<number>>(new Set());
+  // Image subtitles can't be <track>s, so they're kept as a separate list and
+  // drawn by BitmapSubtitleOverlay.
+  const [bitmapOn, setBitmapOn] = React.useState<Set<number>>(new Set());
+
+  React.useEffect(() => {
+    setBitmapOn(new Set());
+  }, [props.bitmapTracks]);
+
+  const toggleBitmap = (i: number) => {
+    const next = new Set(bitmapOn);
+    if (next.has(i)) next.delete(i);
+    else next.add(i);
+    setBitmapOn(next);
+    props.onBitmapSelectionChange(props.bitmapTracks.filter((_, idx) => next.has(idx)));
+  };
 
   const onSubtitleFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const video = props.videoRef.current;
@@ -97,7 +117,8 @@ function SubtitleSelector(props: { videoRef: React.RefObject<HTMLVideoElement> }
           textAlign: 'left',
         }}
       >
-        {open ? '▾' : '▸'} subtitles{selected.size > 0 ? ` (${selected.size} on)` : ''}
+        {open ? '▾' : '▸'} subtitles
+        {selected.size + bitmapOn.size > 0 ? ` (${selected.size + bitmapOn.size} on)` : ''}
       </button>
       {open && tracks.map((track) => (
         <label
@@ -120,6 +141,29 @@ function SubtitleSelector(props: { videoRef: React.RefObject<HTMLVideoElement> }
           <span>{track.label}</span>
         </label>
       ))}
+      {open &&
+        props.bitmapTracks.map((track, i) => (
+          <label
+            key={`bmp-${i}`}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              cursor: 'pointer',
+              fontSize: 12,
+              lineHeight: 1,
+            }}
+            title="Image-based subtitles, drawn over the video"
+          >
+            <input
+              type="checkbox"
+              checked={bitmapOn.has(i)}
+              onChange={() => toggleBitmap(i)}
+              style={{ cursor: 'pointer' }}
+            />
+            <span>{track.label} (image)</span>
+          </label>
+        ))}
       {open && (
         <label style={{ cursor: 'pointer', textDecoration: 'underline', fontSize: 12 }}>
           add subtitles (.srt / .vtt)
@@ -347,6 +391,8 @@ export function WatchTogether() {
   }, [objectUrl]);
 
   const [subScanPct, setSubScanPct] = React.useState<number | null>(null);
+  const [bitmapTracks, setBitmapTracks] = React.useState<BitmapSubTrack[]>([]);
+  const [activeBitmapTracks, setActiveBitmapTracks] = React.useState<BitmapSubTrack[]>([]);
   const [videoError, setVideoError] = React.useState<string | null>(null);
   // What each peer has loaded, keyed by participant identity.
   const [peerFiles, setPeerFiles] = React.useState<Record<string, { name: string; file: string }>>(
@@ -377,7 +423,9 @@ export function WatchTogether() {
     // Dig embedded subtitle tracks out of the container (MKV/WebM).
     const generation = ++fileGeneration.current;
     setSubScanPct(null);
-    extractEmbeddedSubs(file, (fraction) => {
+    setBitmapTracks([]);
+    setActiveBitmapTracks([]);
+    scanSubtitles(file, (fraction) => {
       if (fileGeneration.current !== generation) return;
       setSubScanPct((prev) => {
         const pct = Math.round(fraction * 100);
@@ -390,6 +438,7 @@ export function WatchTogether() {
         const video = videoRef.current;
         if (!video) return;
         for (const t of tracks) {
+          if (t.kind !== 'text') continue;
           const el = document.createElement('track');
           el.kind = 'subtitles';
           el.label = t.label;
@@ -397,6 +446,7 @@ export function WatchTogether() {
           video.appendChild(el);
           el.track.mode = 'disabled';
         }
+        setBitmapTracks(tracks.filter((t): t is BitmapSubTrack => t.kind === 'bitmap'));
       })
       .catch(() => {
         if (fileGeneration.current === generation) setSubScanPct(null);
@@ -476,6 +526,7 @@ export function WatchTogether() {
               );
             }}
           />
+          <BitmapSubtitleOverlay videoRef={videoRef} tracks={activeBitmapTracks} />
           {process.env.NODE_ENV === 'development' &&
             typeof window !== 'undefined' &&
             new URLSearchParams(window.location.search).has('diag') && (
@@ -533,7 +584,11 @@ export function WatchTogether() {
                 scanning embedded subtitles… {subScanPct}%
               </span>
             )}
-            <SubtitleSelector videoRef={videoRef} />
+            <SubtitleSelector
+              videoRef={videoRef}
+              bitmapTracks={bitmapTracks}
+              onBitmapSelectionChange={setActiveBitmapTracks}
+            />
             <CastButton videoRef={videoRef} />
             {Object.entries(peerFiles).map(([id, p]) => (
               <span
