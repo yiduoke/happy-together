@@ -88,48 +88,56 @@ export async function extractEmbeddedSubs(
       );
     };
 
-    // matroska-subtitles ends its own parser as soon as the header shows no
-    // text tracks (a disc rip carrying only image-based VobSub/PGS, say).
-    const parserDone = () => sawTracks && cuesByTrack.size === 0;
+    // The parser closes itself as soon as it sees a Tracks list with no text
+    // subtitles. Writing to it then returns false forever and 'drain' never
+    // fires, so every wait below must also unblock on the stream dying.
+    let closed = false;
+    const markClosed = () => {
+      closed = true;
+    };
+    parser.on('finish', markClosed);
+    parser.on('close', markClosed);
+    parser.on('error', markClosed);
 
-    // Waiting on 'drain' alone deadlocks once the parser has ended, because
-    // an ended stream never drains: resolve on any terminal event too.
     const waitForCapacity = () =>
-      new Promise<void>((resolve) => {
+      new Promise<void>((resolveWait) => {
         const settle = () => {
-          for (const e of ['drain', 'close', 'finish', 'error', 'end']) {
-            parser.removeListener(e, settle);
-          }
-          resolve();
+          parser.off('drain', settle);
+          parser.off('finish', settle);
+          parser.off('close', settle);
+          parser.off('error', settle);
+          resolveWait();
         };
-        for (const e of ['drain', 'close', 'finish', 'error', 'end']) {
-          parser.once(e, settle);
-        }
+        parser.once('drain', settle);
+        parser.once('finish', settle);
+        parser.once('close', settle);
+        parser.once('error', settle);
       });
 
     try {
       const reader = file.stream().getReader();
       let read = 0;
       for (;;) {
+        // Bail before writing: a file whose only subtitles are bitmaps
+        // (VobSub/PGS) declares no text tracks, and the parser is already gone.
+        if (closed || (sawTracks && cuesByTrack.size === 0)) break;
         const { done, value } = await reader.read();
         if (done) break;
         read += value.byteLength;
         onProgress?.(read / file.size);
         // The parser is a node-style Writable; respect backpressure so we
         // don't buffer the whole movie in memory.
-        if (!parser.write(value) && !parserDone()) {
-          await waitForCapacity();
-        }
-        // A file with no subtitle tracks declared: bail after the header.
-        if (parserDone()) break;
+        if (!parser.write(value)) await waitForCapacity();
       }
-      try {
-        parser.end();
-      } catch {
-        // Already ended by the parser itself.
-      }
-      finish();
+      reader.cancel().catch(() => {});
     } catch {
+      // Fall through: whatever cues we already collected are still usable.
+    } finally {
+      try {
+        if (!closed) parser.end();
+      } catch {
+        // Already ended.
+      }
       finish();
     }
   });
