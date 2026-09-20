@@ -11,6 +11,17 @@ import { needsWasm } from './audio/wasmDecoder';
  * decodes natively; any other is played by AudioTrackEngine over the muted
  * element. Exactly one track at a time — two dubs at once is just noise.
  */
+/**
+ * Which track the <video> element plays on its own: the first one whose codec
+ * the browser can actually decode. A rip whose main track is E-AC3 silently
+ * falls through to, say, an AAC commentary — so defaulting the UI to track 0
+ * would claim one thing while the viewer hears another.
+ */
+function nativelyPlaying(tracks: AudioTrackInfo[]): number | null {
+  const native = tracks.find((t) => t.codec && !needsWasm(t.codec));
+  return native?.id ?? null;
+}
+
 export function AudioTrackSelector(props: {
   file: File | null;
   videoRef: React.RefObject<HTMLVideoElement | null>;
@@ -44,7 +55,7 @@ export function AudioTrackSelector(props: {
       .then((found) => {
         if (cancelled) return;
         setTracks(found);
-        setSelected(found[0]?.id ?? null);
+        setSelected(nativelyPlaying(found));
       })
       .catch(() => {});
     return () => {
@@ -54,17 +65,11 @@ export function AudioTrackSelector(props: {
     };
   }, [props.file, container]);
 
-  // The element decodes the first track by itself — unless its codec is one
-  // browsers refuse, in which case even "original" has to go through us.
-  const needsEngine = (track: AudioTrackInfo) =>
-    track.id !== tracks[0]?.id || (!!track.codec && needsWasm(track.codec));
+  const nativeId = nativelyPlaying(tracks);
 
   const choose = (track: AudioTrackInfo) => {
     const video = props.videoRef.current;
     if (!video || !props.file || !container || !track.codec) return;
-    // Re-picking the already-selected track is a retry, not a no-op: it is how
-    // you start the decoder for a first track that needs one.
-    if (track.id === selected && status.s !== 'stopped') return;
     setSelected(track.id);
     if (!engine.current) {
       engine.current = new AudioTrackEngine(video, (s, detail) => setStatus({ s, detail }));
@@ -72,10 +77,12 @@ export function AudioTrackSelector(props: {
         (window as unknown as { __audioEngine?: AudioTrackEngine }).__audioEngine = engine.current;
       }
     }
-    if (needsEngine(track)) {
-      engine.current.start(props.file, container, track);
-    } else {
+    // Picking the track the element already decodes just means getting out of
+    // the way; anything else we have to play ourselves.
+    if (track.id === nativeId) {
       engine.current.stop();
+    } else {
+      engine.current.start(props.file, container, track);
     }
   };
 
@@ -84,12 +91,11 @@ export function AudioTrackSelector(props: {
   const anyNeedsDecoder = tracks.some((t) => t.codec && needsWasm(t.codec));
   if (tracks.length < 2 && !anyNeedsDecoder) return null;
 
-  const selectedTrack = tracks.find((t) => t.id === selected);
-  const needsClickToStart =
-    status.s === 'stopped' && !!selectedTrack?.codec && needsWasm(selectedTrack.codec);
+  // Nothing plays natively at all (every track is a codec browsers refuse).
+  const nothingPlays = nativeId === null && status.s === 'stopped';
 
-  const statusLine = needsClickToStart
-    ? `${selectedTrack!.codecName} needs the bundled decoder — click it to enable sound`
+  const statusLine = nothingPlays
+    ? 'no track your browser can play — pick one to decode it here'
     : status.s === 'loading-decoder'
       ? 'loading decoder (one-time, ~31 MB)…'
       : status.s === 'starting'
@@ -149,7 +155,7 @@ export function AudioTrackSelector(props: {
               />
               <span>
                 {track.label}
-                {i === 0 ? ' (original)' : ''}
+                {track.id === nativeId ? ' (browser default)' : ''}
                 {disabled ? ` — ${track.codecName}, not playable` : ''}
                 {!disabled && needsWasm(track.codec!) ? ` — ${track.codecName}` : ''}
               </span>
