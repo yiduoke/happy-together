@@ -9,14 +9,19 @@ import { parseAacConfig } from './aac';
 // Media seconds decoded and scheduled ahead of the playhead. Small on purpose:
 // frames already scheduled can't follow a later playbackRate change exactly.
 const LOOKAHEAD = 1.0;
-// Compressed frames held between demuxer and decoder before we stall the demuxer.
-const QUEUE_HIGH = 64;
+// Compressed frames held between demuxer and decoder before we stall the
+// demuxer. This must comfortably exceed one batch: E-AC3 runs ~31 frames a
+// second, so a 5 s batch is ~157 frames and a 64-frame cap starved every one
+// of them into a short, separately-decoded fragment.
+const QUEUE_HIGH = 512;
 const MAX_DECODE_QUEUE = 8;
 // Past this much divergence from the video clock we restart from its position.
 // video.currentTime advances in frame-sized steps (~42 ms at 24 fps), so the
 // steady-state threshold must sit well above that jitter. The first check
 // after a (re)start is tighter: it absorbs the element's play-start latency.
 const RESYNC_THRESHOLD = 0.12;
+// Past this, the playhead really moved and the pipeline must restart.
+const HARD_RESYNC_THRESHOLD = 1.0;
 const FIRST_CHECK_THRESHOLD = 0.06;
 const TICK_MS = 50;
 
@@ -45,6 +50,7 @@ export class AudioTrackEngine {
   private wasm: WasmAudioDecoder | null = null;
   private wasmBatch: EncodedAudioFrame[] = [];
   private wasmBusy = false;
+  private demuxDone = false;
   private abort: AbortController | null = null;
   private sources = new Set<AudioBufferSourceNode>();
   private queue: EncodedAudioFrame[] = [];
@@ -197,6 +203,7 @@ export class AudioTrackEngine {
     }
     this.wasmBatch.length = 0;
     this.wasmBusy = false;
+    this.demuxDone = false;
 
     this.rate = this.video.playbackRate || 1;
     this.anchorCtx = this.ctx.currentTime;
@@ -221,9 +228,26 @@ export class AudioTrackEngine {
       this.container === 'mp4'
         ? demuxMp4AudioTrack(this.file, this.track.id, fromMedia, onFrame, signal, backpressure)
         : demuxMkvAudioTrack(this.file, this.track.id, fromMedia, onFrame, signal, backpressure);
-    demux.catch((e) => {
-      if (!signal.aborted) this.fail(e instanceof Error ? e.message : 'demux failed');
-    });
+    demux
+      .then(() => {
+        if (!signal.aborted) this.demuxDone = true;
+      })
+      .catch((e) => {
+        if (!signal.aborted) this.fail(e instanceof Error ? e.message : 'demux failed');
+      });
+  }
+
+  /**
+   * Re-align to the video clock without disturbing the demuxer or decoder.
+   * Already-scheduled audio belongs to the old mapping, so it is dropped;
+   * frames still in flight are replayed against the new anchor.
+   */
+  private reanchor() {
+    if (!this.ctx) return;
+    this.stopSources();
+    this.anchorMedia = this.video.currentTime;
+    this.anchorCtx = this.ctx.currentTime;
+    this.minAcceptedTs = this.video.currentTime - 0.1;
   }
 
   private tick = () => {
@@ -242,7 +266,16 @@ export class AudioTrackEngine {
       const drift = this.video.currentTime - nowMedia;
       const threshold = this.checkedSinceResync ? RESYNC_THRESHOLD : FIRST_CHECK_THRESHOLD;
       this.checkedSinceResync = true;
-      if (Math.abs(drift) > threshold) this.resync(this.video.currentTime);
+      if (Math.abs(drift) > HARD_RESYNC_THRESHOLD) {
+        // A real jump: start the pipeline over at the new position.
+        this.resync(this.video.currentTime);
+      } else if (Math.abs(drift) > threshold) {
+        // Ordinary clock drift between the element and the AudioContext.
+        // Re-anchor in place: restarting the demuxer would re-read the file
+        // from byte zero, which on a feature-length MKV means seconds of
+        // silence every time the two clocks wander apart.
+        this.reanchor();
+      }
     }
   };
 
@@ -292,9 +325,13 @@ export class AudioTrackEngine {
     const batch = this.wasmBatch;
     const first = batch[0];
     if (!first) return;
-    const span = batch[batch.length - 1].timestamp + batch[batch.length - 1].duration - first.timestamp;
-    // Wait for a full batch unless the demuxer has run dry (end of file).
-    if (span < WASM_BATCH_SECONDS && this.queue.length > 0) return;
+    const span =
+      batch[batch.length - 1].timestamp + batch[batch.length - 1].duration - first.timestamp;
+    // Every batch is a separate ffmpeg run, so don't decode a short one just
+    // because the demuxer hasn't caught up — wait, unless the file ended or
+    // we're about to run out of scheduled audio.
+    const starving = this.decodedUntil <= nowMedia + 0.25;
+    if (span < WASM_BATCH_SECONDS && !this.demuxDone && !starving) return;
 
     this.wasmBatch = [];
     this.wasmBusy = true;

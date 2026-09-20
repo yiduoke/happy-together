@@ -31,6 +31,23 @@ function codecFromMatroska(codecId: string): { codec: AudioTrackInfo['codec']; n
   return { codec: null, name: known[codecId] ?? codecId.replace(/^A_/, '') };
 }
 
+// Samples per compressed frame, by codec. Getting this wrong skews every
+// timestamp we hand the engine: AC3/E-AC3 frames are 1536 samples, so calling
+// them 1024 made each one look 10.7 ms shorter than it really is.
+function frameDuration(codec: AudioTrackInfo['codec'], sampleRate: number): number {
+  switch (codec) {
+    case 'opus':
+      return 0.02;
+    case 'ac3':
+    case 'eac3':
+      return 1536 / sampleRate;
+    case 'dts':
+      return 512 / sampleRate;
+    default:
+      return 1024 / sampleRate;
+  }
+}
+
 /** Split a laced block payload into its individual frames. */
 function splitLacing(payload: Uint8Array, lacing: number, ebml: EbmlModule): Uint8Array[] {
   const { BlockLacing } = ebml;
@@ -165,8 +182,7 @@ async function walk(
             channels,
             description: priv ? new Uint8Array(priv) : undefined,
           },
-          // AAC frames are 1024 samples; Opus in Matroska is almost always 20 ms.
-          defaultFrameDuration: codec === 'opus' ? 0.02 : 1024 / sampleRate,
+          defaultFrameDuration: frameDuration(codec, sampleRate),
         });
       }
       if (opts.onTracks(Array.from(tracks.values())) === false) stop = true;
