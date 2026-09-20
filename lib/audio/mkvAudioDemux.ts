@@ -17,13 +17,14 @@ interface TrackMeta {
 function codecFromMatroska(codecId: string): { codec: AudioTrackInfo['codec']; name: string } {
   if (codecId.startsWith('A_AAC')) return { codec: 'aac', name: 'AAC' };
   if (codecId === 'A_OPUS') return { codec: 'opus', name: 'Opus' };
+  // Decoded by the bundled ffmpeg WASM build, not by the browser.
+  if (codecId === 'A_AC3') return { codec: 'ac3', name: 'AC3' };
+  if (codecId === 'A_EAC3') return { codec: 'eac3', name: 'E-AC3' };
+  if (codecId.startsWith('A_DTS')) return { codec: 'dts', name: 'DTS' };
+  if (codecId === 'A_TRUEHD' || codecId === 'A_MLP') return { codec: 'truehd', name: 'TrueHD' };
   const known: Record<string, string> = {
-    A_AC3: 'AC3',
-    A_EAC3: 'E-AC3',
-    A_DTS: 'DTS',
     A_VORBIS: 'Vorbis',
     A_FLAC: 'FLAC',
-    A_TRUEHD: 'TrueHD',
     'A_MPEG/L3': 'MP3',
     'A_MPEG/L2': 'MP2',
   };

@@ -3,8 +3,8 @@
   "version": "0.2.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
+    "dev": "node scripts/copy-ffmpeg-core.mjs && next dev",
+    "build": "node scripts/copy-ffmpeg-core.mjs && next build",
     "start": "next start",
     "lint": "next lint",
     "lint:fix": "next lint --fix",
@@ -14,6 +14,10 @@
   },
   "dependencies": {
     "@datadog/browser-logs": "^5.23.3",
+    "@ffmpeg/core": "^0.12.10",
+    "@ffmpeg/ffmpeg": "^0.12.15",
+    "@ffmpeg/util": "^0.12.2",
+    "@libav.js/variant-default": "^6.10.9",
     "@livekit/components-react": "2.9.23",
     "@livekit/components-styles": "1.2.0",
     "@livekit/krisp-noise-filter": "0.4.3",
