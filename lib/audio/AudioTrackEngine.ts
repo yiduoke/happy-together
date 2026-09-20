@@ -4,6 +4,7 @@ import type { AudioContainer, AudioTrackInfo, EncodedAudioFrame } from './types'
 import { demuxMkvAudioTrack } from './mkvAudioDemux';
 import { demuxMp4AudioTrack } from './mp4AudioDemux';
 import { WasmAudioDecoder, needsWasm } from './wasmDecoder';
+import { parseAacConfig } from './aac';
 
 // Media seconds decoded and scheduled ahead of the playhead. Small on purpose:
 // frames already scheduled can't follow a later playbackRate change exactly.
@@ -95,10 +96,13 @@ export class AudioTrackEngine {
       if (this.track !== track) return; // superseded while loading
       this.decoderConfig = null;
     } else {
+      // HE-AAC is coded at half its playback rate, so trust the config bytes
+      // over the container's advertised rate.
+      const aac = track.codec === 'aac' ? parseAacConfig(track.description) : null;
       this.decoderConfig = {
-        codec: track.codec === 'aac' ? 'mp4a.40.2' : 'opus',
-        sampleRate: track.sampleRate,
-        numberOfChannels: track.channels,
+        codec: aac?.codec ?? (track.codec === 'aac' ? 'mp4a.40.2' : 'opus'),
+        sampleRate: aac?.sampleRate ?? track.sampleRate,
+        numberOfChannels: aac?.channels ?? track.channels,
         description: track.description,
       };
       try {
@@ -110,7 +114,7 @@ export class AudioTrackEngine {
       }
     }
 
-    this.ctx = new AudioContext({ sampleRate: track.sampleRate });
+    this.ctx = new AudioContext({ sampleRate: this.decoderConfig?.sampleRate ?? track.sampleRate });
     this.gain = this.ctx.createGain();
     this.gain.gain.value = this.video.volume;
     this.gain.connect(this.ctx.destination);
