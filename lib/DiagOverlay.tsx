@@ -62,6 +62,22 @@ export function DiagOverlay(props: { videoRef: React.RefObject<HTMLVideoElement>
       }
 
       const q = video.getVideoPlaybackQuality?.();
+      // Audio engine numbers, when an alternate track is playing.
+      const eng = (
+        window as unknown as { __audioEngine?: { debugState(): Record<string, unknown> } }
+      ).__audioEngine;
+      const a = eng?.debugState?.();
+      const audio = a
+        ? {
+            'AUDIO drift': `${(((a.videoTime as number) - (a.expectedMedia as number)) * 1000).toFixed(0)}ms`,
+            'AUDIO batches': `${a.batches} (last ${a.lastBatchMs}ms)`,
+            'AUDIO reanchors': String(a.reanchors),
+            'AUDIO resyncs': String(a.resyncs),
+            'AUDIO dropped': String(a.dropped),
+            'AUDIO queued/live': `${a.queued} / ${a.liveSources}`,
+            'AUDIO ctx': String(a.ctxState),
+          }
+        : ({} as Record<string, string>);
       setStats({
         t: video.currentTime.toFixed(2),
         state: video.error
@@ -73,6 +89,7 @@ export function DiagOverlay(props: { videoRef: React.RefObject<HTMLVideoElement>
         'dropped/total frames': q ? `${q.droppedVideoFrames}/${q.totalVideoFrames}` : 'n/a',
         'audio rms': Number.isNaN(rms) ? 'no probe' : rms.toFixed(4),
         'audio dropouts': probe.current ? String(probe.current.dropouts) : 'n/a',
+        ...audio,
       });
     }, 500);
     return () => clearInterval(interval);

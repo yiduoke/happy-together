@@ -51,6 +51,7 @@ export class AudioTrackEngine {
   private wasmBatch: EncodedAudioFrame[] = [];
   private wasmBusy = false;
   private demuxDone = false;
+  private stats = { batches: 0, reanchors: 0, resyncs: 0, lastBatchMs: 0, dropped: 0 };
   private abort: AbortController | null = null;
   private sources = new Set<AudioBufferSourceNode>();
   private queue: EncodedAudioFrame[] = [];
@@ -179,6 +180,7 @@ export class AudioTrackEngine {
   private resync(fromMedia: number) {
     if (!this.ctx || !this.file || !this.track) return;
     if (!this.decoderConfig && !this.wasm) return;
+    this.stats.resyncs++;
 
     this.abort?.abort();
     this.abort = new AbortController();
@@ -244,6 +246,7 @@ export class AudioTrackEngine {
    */
   private reanchor() {
     if (!this.ctx) return;
+    this.stats.reanchors++;
     this.stopSources();
     this.anchorMedia = this.video.currentTime;
     this.anchorCtx = this.ctx.currentTime;
@@ -337,9 +340,12 @@ export class AudioTrackEngine {
     this.wasmBusy = true;
     const decoder = this.wasm;
     const generation = this.abort;
+    const startedAt = performance.now();
     decoder!
       .decode(batch)
       .then((pcm) => {
+        this.stats.batches++;
+        this.stats.lastBatchMs = Math.round(performance.now() - startedAt);
         this.wasmBusy = false;
         // A resync while decoding invalidates this batch.
         if (!pcm || this.abort !== generation) return;
@@ -385,7 +391,10 @@ export class AudioTrackEngine {
     const startAt = this.anchorCtx + (ts - this.anchorMedia) / this.rate;
     const now = ctx.currentTime;
     const durationCtx = buffer.duration / this.rate;
-    if (startAt + durationCtx <= now) return; // entirely in the past
+    if (startAt + durationCtx <= now) {
+      this.stats.dropped++; // decoded too late to be heard
+      return;
+    }
 
     const source = ctx.createBufferSource();
     source.buffer = buffer;
@@ -481,6 +490,7 @@ export class AudioTrackEngine {
       liveSources: this.sources.size,
       decodeQueue: this.decoder?.decodeQueueSize,
       decoderState: this.decoder?.state,
+      ...this.stats,
     };
   }
 }
