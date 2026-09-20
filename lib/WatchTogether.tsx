@@ -268,6 +268,11 @@ export function WatchTogether() {
         return;
       }
       const video = videoRef.current;
+      if (process.env.NODE_ENV === 'development') {
+        const w = window as unknown as { __syncStats?: Record<string, number> };
+        w.__syncStats = w.__syncStats ?? {};
+        w.__syncStats[msg.t] = (w.__syncStats[msg.t] ?? 0) + 1;
+      }
       switch (msg.t) {
         case 'play':
           if (!video) return;
@@ -394,6 +399,19 @@ export function WatchTogether() {
 
   const [subScanPct, setSubScanPct] = React.useState<number | null>(null);
   const [bitmapTracks, setBitmapTracks] = React.useState<BitmapSubTrack[]>([]);
+  React.useEffect(() => {
+    if (process.env.NODE_ENV !== 'development') return;
+    const update = () => {
+      (window as unknown as { __peerCount?: number }).__peerCount = room.remoteParticipants.size;
+    };
+    update();
+    room.on(RoomEvent.ParticipantConnected, update);
+    room.on(RoomEvent.ParticipantDisconnected, update);
+    return () => {
+      room.off(RoomEvent.ParticipantConnected, update);
+      room.off(RoomEvent.ParticipantDisconnected, update);
+    };
+  }, [room]);
   const [activeBitmapTracks, setActiveBitmapTracks] = React.useState<BitmapSubTrack[]>([]);
   const [videoError, setVideoError] = React.useState<string | null>(null);
   // What each peer has loaded, keyed by participant identity.

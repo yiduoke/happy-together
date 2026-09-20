@@ -51,7 +51,15 @@ export class AudioTrackEngine {
   private wasmBatch: EncodedAudioFrame[] = [];
   private wasmBusy = false;
   private demuxDone = false;
-  private stats = { batches: 0, reanchors: 0, resyncs: 0, lastBatchMs: 0, dropped: 0 };
+  private stats = {
+    batches: 0,
+    reanchors: 0,
+    resyncs: 0,
+    lastBatchMs: 0,
+    dropped: 0,
+    seekedEvents: 0,
+    lastResync: 'none',
+  };
   private abort: AbortController | null = null;
   private sources = new Set<AudioBufferSourceNode>();
   private queue: EncodedAudioFrame[] = [];
@@ -132,6 +140,7 @@ export class AudioTrackEngine {
     this.video.addEventListener('volumechange', this.onVolumeChange);
 
     this.onStatus('starting');
+    this.stats.lastResync = 'start';
     this.resync(this.video.currentTime);
     this.tickTimer = window.setInterval(this.tick, TICK_MS);
   }
@@ -271,6 +280,7 @@ export class AudioTrackEngine {
       this.checkedSinceResync = true;
       if (Math.abs(drift) > HARD_RESYNC_THRESHOLD) {
         // A real jump: start the pipeline over at the new position.
+        this.stats.lastResync = `drift ${(drift * 1000).toFixed(0)}ms`;
         this.resync(this.video.currentTime);
       } else if (Math.abs(drift) > threshold) {
         // Ordinary clock drift between the element and the AudioContext.
@@ -420,6 +430,8 @@ export class AudioTrackEngine {
   // --- video mirroring ----------------------------------------------------
 
   private onSeeked = () => {
+    this.stats.seekedEvents++;
+    this.stats.lastResync = `seeked@${this.video.currentTime.toFixed(1)}`;
     this.resync(this.video.currentTime);
   };
 

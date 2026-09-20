@@ -67,12 +67,21 @@ export function DiagOverlay(props: { videoRef: React.RefObject<HTMLVideoElement>
         window as unknown as { __audioEngine?: { debugState(): Record<string, unknown> } }
       ).__audioEngine;
       const a = eng?.debugState?.();
+      const w = window as unknown as {
+        __syncStats?: Record<string, number>;
+        __peerCount?: number;
+      };
+      const sync = w.__syncStats ?? {};
+      const syncLine = Object.entries(sync)
+        .map(([k, n]) => `${k}:${n}`)
+        .join(' ');
       const audio = a
         ? {
             'AUDIO drift': `${(((a.videoTime as number) - (a.expectedMedia as number)) * 1000).toFixed(0)}ms`,
             'AUDIO batches': `${a.batches} (last ${a.lastBatchMs}ms)`,
             'AUDIO reanchors': String(a.reanchors),
-            'AUDIO resyncs': String(a.resyncs),
+            'AUDIO resyncs': `${a.resyncs} (${a.lastResync})`,
+            'AUDIO seeked evts': String(a.seekedEvents),
             'AUDIO dropped': String(a.dropped),
             'AUDIO queued/live': `${a.queued} / ${a.liveSources}`,
             'AUDIO ctx': String(a.ctxState),
@@ -89,6 +98,8 @@ export function DiagOverlay(props: { videoRef: React.RefObject<HTMLVideoElement>
         'dropped/total frames': q ? `${q.droppedVideoFrames}/${q.totalVideoFrames}` : 'n/a',
         'audio rms': Number.isNaN(rms) ? 'no probe' : rms.toFixed(4),
         'audio dropouts': probe.current ? String(probe.current.dropouts) : 'n/a',
+        peers: String(w.__peerCount ?? 0),
+        'sync msgs in': syncLine || 'none',
         ...audio,
       });
     }, 500);
