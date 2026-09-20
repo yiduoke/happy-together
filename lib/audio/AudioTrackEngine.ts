@@ -51,6 +51,8 @@ export class AudioTrackEngine {
   private wasmBatch: EncodedAudioFrame[] = [];
   private wasmBusy = false;
   private demuxDone = false;
+  /** Set synchronously so a second call can't slip in during async setup. */
+  private pending: { file: File; trackId: number } | null = null;
   private stats = {
     batches: 0,
     reanchors: 0,
@@ -59,6 +61,9 @@ export class AudioTrackEngine {
     dropped: 0,
     seekedEvents: 0,
     lastResync: 'none',
+    starts: 0,
+    redundantStarts: 0,
+    startedBy: '',
   };
   private abort: AbortController | null = null;
   private sources = new Set<AudioBufferSourceNode>();
@@ -87,11 +92,30 @@ export class AudioTrackEngine {
   ) {}
 
   async start(file: File, container: AudioContainer, track: AudioTrackInfo) {
+    // Relaunching for the track already playing would tear down a healthy
+    // pipeline and — because Matroska has no random access — re-read the
+    // whole film from byte zero. Costly enough on a 2 GB rip to disturb
+    // video playback, so treat a redundant start as a no-op.
+    const alreadyRunning = this.ctx && this.file === file && this.track?.id === track.id;
+    const alreadyStarting = this.pending?.file === file && this.pending?.trackId === track.id;
+    if (alreadyRunning || alreadyStarting) {
+      this.stats.redundantStarts++;
+      return;
+    }
+    this.stats.starts++;
+    // Who relaunched us? The caller frame names the culprit.
+    this.stats.startedBy = (new Error().stack ?? '')
+      .split('\n')
+      .slice(2, 4)
+      .map((l) => l.trim().replace(/^at\s+/, '').split(' ')[0])
+      .join(' < ')
+      .slice(0, 60);
     this.stop();
     if (!track.codec) {
       this.onStatus('error', `${track.codecName} isn't decodable in this browser`);
       return;
     }
+    this.pending = { file, trackId: track.id };
     this.file = file;
     this.container = container;
     this.track = track;
@@ -104,6 +128,7 @@ export class AudioTrackEngine {
         await this.wasm.init();
       } catch (e) {
         this.wasm = null;
+        this.pending = null;
         const why = e instanceof Error ? `: ${e.message}` : '';
         this.onStatus('error', `couldn't load the ${track.codecName} decoder${why}`);
         return;
@@ -124,6 +149,7 @@ export class AudioTrackEngine {
         const support = await AudioDecoder.isConfigSupported(this.decoderConfig);
         if (!support.supported) throw new Error('unsupported');
       } catch {
+        this.pending = null;
         this.onStatus('error', `${track.codecName} isn't decodable in this browser`);
         return;
       }
@@ -143,9 +169,11 @@ export class AudioTrackEngine {
     this.stats.lastResync = 'start';
     this.resync(this.video.currentTime);
     this.tickTimer = window.setInterval(this.tick, TICK_MS);
+    this.pending = null;
   }
 
   stop() {
+    this.pending = null;
     if (this.tickTimer !== null) {
       clearInterval(this.tickTimer);
       this.tickTimer = null;

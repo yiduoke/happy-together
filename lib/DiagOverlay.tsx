@@ -82,6 +82,8 @@ export function DiagOverlay(props: { videoRef: React.RefObject<HTMLVideoElement>
             'AUDIO reanchors': String(a.reanchors),
             'AUDIO resyncs': `${a.resyncs} (${a.lastResync})`,
             'AUDIO seeked evts': String(a.seekedEvents),
+            'AUDIO starts': `${a.starts} (+${a.redundantStarts} ignored)`,
+            'AUDIO started by': String(a.startedBy),
             'AUDIO dropped': String(a.dropped),
             'AUDIO queued/live': `${a.queued} / ${a.liveSources}`,
             'AUDIO ctx': String(a.ctxState),
