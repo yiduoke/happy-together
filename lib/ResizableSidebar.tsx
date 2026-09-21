@@ -11,8 +11,12 @@ const STORAGE_KEY = 'ht-sidebar-width';
  * Right sidebar with a draggable divider: drag to resize, use the chevron
  * (or double-click the divider) to collapse/expand. Children stay mounted
  * while collapsed so media and chat history keep working.
+ *
+ * `full` hands the whole window to the children (webcam-only mode). The
+ * remembered width is left untouched, so leaving that mode restores the
+ * column exactly as it was.
  */
-export function ResizableSidebar(props: { children: React.ReactNode }) {
+export function ResizableSidebar(props: { children: React.ReactNode; full?: boolean }) {
   const [width, setWidth] = React.useState(DEFAULT_WIDTH);
   const [collapsed, setCollapsed] = React.useState(false);
   const dragging = React.useRef(false);
@@ -45,6 +49,14 @@ export function ResizableSidebar(props: { children: React.ReactNode }) {
       return w;
     });
   };
+
+  if (props.full) {
+    return (
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+        {props.children}
+      </div>
+    );
+  }
 
   return (
     <>

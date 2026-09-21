@@ -65,3 +65,32 @@ h2 a {
 h2 a {
   text-decoration: none;
 }
+
+/*
+ * The control bar is laid out for a full-width window. In our narrow sidebar
+ * it overflows and the leave button is clipped off the right-hand edge, so
+ * let it wrap instead.
+ */
+.lk-control-bar {
+  flex-wrap: wrap;
+  justify-content: center;
+  row-gap: 0.25rem;
+}
+
+/*
+ * SelfTile wraps ParticipantTile so the mic/camera toggles can be positioned
+ * over it. That wrapper becomes the grid/carousel child, and the tile inside
+ * no longer gets its size from the layout — it collapses to zero height
+ * without this.
+ */
+.ht-tile-wrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.ht-tile-wrap > .lk-participant-tile {
+  width: 100%;
+  height: 100%;
+}

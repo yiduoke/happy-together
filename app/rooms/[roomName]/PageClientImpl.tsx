@@ -218,6 +218,19 @@ function VideoConferenceComponent(props: {
 
   const lowPowerMode = useLowCPUOptimizer(room);
 
+  // Webcam-only mode: hide the film and give the window to the webcams, for
+  // talking once it has finished. Playback is left exactly as it is — pausing
+  // here would pause it for everyone else in the room too.
+  const [webcamOnly, setWebcamOnly] = React.useState(false);
+  React.useEffect(() => {
+    if (!webcamOnly) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setWebcamOnly(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [webcamOnly]);
+
   const router = useRouter();
   const handleOnLeave = React.useCallback(() => router.push('/'), [router]);
   const handleError = React.useCallback((error: Error) => {
@@ -241,14 +254,26 @@ function VideoConferenceComponent(props: {
     <div className="lk-room-container" style={{ display: 'flex', height: '100%' }}>
       <RoomContext.Provider value={room}>
         <KeyboardShortcuts />
-        {/* Main stage: synced local-file playback */}
-        <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
+        {/* Main stage: synced local-file playback. Kept mounted while hidden
+            so the film, its buffers and the room's sync all survive. */}
+        <div
+          style={{
+            flex: 1,
+            minWidth: 0,
+            position: 'relative',
+            display: webcamOnly ? 'none' : 'block',
+          }}
+        >
           <WatchTogether />
           <CopyLinkButton />
         </div>
         {/* Sidebar: webcams, controls, chat — resizable + collapsible */}
-        <ResizableSidebar>
-          <Sidebar SettingsComponent={SHOW_SETTINGS_MENU ? SettingsMenu : undefined} />
+        <ResizableSidebar full={webcamOnly}>
+          <Sidebar
+            SettingsComponent={SHOW_SETTINGS_MENU ? SettingsMenu : undefined}
+            webcamOnly={webcamOnly}
+            onToggleWebcamOnly={() => setWebcamOnly((v) => !v)}
+          />
         </ResizableSidebar>
         <DebugMode />
         <RecordingIndicator />
