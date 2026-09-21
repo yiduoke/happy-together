@@ -106,6 +106,111 @@ function splitLacing(payload: Uint8Array, lacing: number, ebml: EbmlModule): Uin
   return frames;
 }
 
+
+// --- seeking ---------------------------------------------------------------
+
+const CLUSTER_ID = [0x1f, 0x43, 0xb6, 0x75];
+const TIMECODE_ID = 0xe7;
+
+/** Read an EBML variable-length integer; returns its value and byte length. */
+function readVint(buf: Uint8Array, pos: number): { value: number; length: number } | null {
+  const first = buf[pos];
+  if (first === undefined || first === 0) return null;
+  let length = 1;
+  let mask = 0x80;
+  while (length <= 8 && !(first & mask)) {
+    length++;
+    mask >>= 1;
+  }
+  if (pos + length > buf.length) return null;
+  let value = first & (mask - 1);
+  for (let i = 1; i < length; i++) value = value * 256 + buf[pos + i];
+  return { value, length };
+}
+
+/**
+ * Find a Cluster start inside `buf` and read its Timecode, which is the
+ * cluster's position in the film. Returns the offset within buf and the time.
+ */
+function clusterAt(buf: Uint8Array, timecodeScale: number) {
+  for (let i = 0; i + 16 < buf.length; i++) {
+    if (
+      buf[i] !== CLUSTER_ID[0] ||
+      buf[i + 1] !== CLUSTER_ID[1] ||
+      buf[i + 2] !== CLUSTER_ID[2] ||
+      buf[i + 3] !== CLUSTER_ID[3]
+    ) {
+      continue;
+    }
+    const size = readVint(buf, i + 4);
+    if (!size) continue;
+    // A Cluster's first child is normally its Timecode.
+    let p = i + 4 + size.length;
+    if (buf[p] !== TIMECODE_ID) continue;
+    const tcSize = readVint(buf, p + 1);
+    if (!tcSize) continue;
+    p += 1 + tcSize.length;
+    let tc = 0;
+    for (let k = 0; k < tcSize.value && p + k < buf.length; k++) tc = tc * 256 + buf[p + k];
+    return { offset: i, time: tc * timecodeScale };
+  }
+  return null;
+}
+
+/**
+ * Byte offset of the last cluster starting at or before `target`.
+ *
+ * Matroska has no index we can rely on, so this binary-searches the file:
+ * read a window, find a cluster, read its timestamp, and narrow. Without it,
+ * playing from an hour in means reading the preceding gigabyte first — slow
+ * enough that the playhead outruns the demuxer and it never catches up.
+ */
+async function findClusterOffset(
+  file: File,
+  target: number,
+  timecodeScale: number,
+  signal?: AbortSignal,
+): Promise<number> {
+  if (target <= 0) return 0;
+  const WINDOW = 512 * 1024;
+
+  // A window can land inside a large cluster's payload and contain no header
+  // at all, so always scan forward for the next real cluster rather than
+  // assuming the target lies earlier.
+  const nextClusterFrom = async (from: number) => {
+    let pos = Math.max(0, from);
+    for (let tries = 0; tries < 64 && pos < file.size; tries++) {
+      if (signal?.aborted) return null;
+      const buf = new Uint8Array(await file.slice(pos, pos + WINDOW).arrayBuffer());
+      if (buf.length === 0) return null;
+      const found = clusterAt(buf, timecodeScale);
+      if (found) return { at: pos + found.offset, time: found.time };
+      pos += WINDOW - 64; // overlap so a header can't be split across reads
+    }
+    return null;
+  };
+
+  let lo = 0;
+  let hi = file.size;
+  let best = 0;
+  for (let step = 0; step < 32 && lo < hi; step++) {
+    if (signal?.aborted) return best;
+    const mid = Math.floor((lo + hi) / 2);
+    const found = await nextClusterFrom(mid);
+    if (!found || found.time > target) {
+      hi = mid;
+    } else {
+      best = found.at;
+      // Nothing before this can be a better answer.
+      if (found.at + 1 <= lo) break;
+      lo = found.at + 1;
+    }
+    if (hi - lo < WINDOW) break;
+  }
+  return best;
+}
+
+
 /**
  * Stream a Matroska file through the EBML decoder. `onTracks` fires once
  * with every audio track; `onFrame` (when given) receives frames for
@@ -119,6 +224,11 @@ async function walk(
     backpressure?: () => Promise<void>;
     onTracks: (tracks: TrackMeta[]) => boolean | void; // return false to stop
     onFrame?: (frame: EncodedAudioFrame) => void;
+    /** Begin reading here instead of at the start of the file. */
+    startByte?: number;
+    /** Header values, when starting mid-file where the header isn't present. */
+    seed?: { timecodeScale: number; tracks: Map<number, TrackMeta> };
+    captureHeader?: (h: { timecodeScale: number; tracks: Map<number, TrackMeta> }) => void;
   },
 ): Promise<void> {
   const ebml = await import('ebml-stream');
@@ -128,10 +238,10 @@ async function walk(
     bufferTagIds: [EbmlTagId.TimecodeScale, EbmlTagId.Tracks, EbmlTagId.BlockGroup],
   });
 
-  let timecodeScale = DEFAULT_TIMECODE_SCALE_NS / 1e9; // seconds per unit
+  let timecodeScale = opts.seed?.timecodeScale ?? DEFAULT_TIMECODE_SCALE_NS / 1e9;
   let clusterTimecode = 0;
   let stop = false;
-  const tracks = new Map<number, TrackMeta>();
+  const tracks = opts.seed ? opts.seed.tracks : new Map<number, TrackMeta>();
 
   const getData = (master: { Children: Array<{ id: number; data?: unknown }> }, id: number) =>
     master.Children.find((c) => c.id === id)?.data;
@@ -185,6 +295,7 @@ async function walk(
           defaultFrameDuration: frameDuration(codec, sampleRate),
         });
       }
+      opts.captureHeader?.({ timecodeScale, tracks });
       if (opts.onTracks(Array.from(tracks.values())) === false) stop = true;
     } else if (chunk.id === EbmlTagId.SimpleBlock) {
       emitFrames(chunk);
@@ -197,7 +308,7 @@ async function walk(
     }
   });
 
-  const reader = file.stream().getReader();
+  const reader = (opts.startByte ? file.slice(opts.startByte) : file).stream().getReader();
   try {
     for (;;) {
       if (stop || opts.signal?.aborted) break;
@@ -235,7 +346,7 @@ export async function probeMkvAudioTracks(file: File): Promise<AudioTrackInfo[]>
  * without parsing Cues, so a seek is served by re-walking from the start
  * and skipping frames before `fromTime`.
  */
-export function demuxMkvAudioTrack(
+export async function demuxMkvAudioTrack(
   file: File,
   trackId: number,
   fromTime: number,
@@ -243,10 +354,30 @@ export function demuxMkvAudioTrack(
   signal: AbortSignal,
   backpressure?: () => Promise<void>,
 ): Promise<void> {
+  // Read the header first: it carries the track list and timecode scale, and
+  // it is only at the start of the file.
+  let header: { timecodeScale: number; tracks: Map<number, TrackMeta> } | null = null;
+  await walk(file, {
+    signal,
+    onTracks: () => false, // stop as soon as the header is parsed
+    captureHeader: (h) => {
+      header = h;
+    },
+  });
+  if (signal.aborted || !header) return;
+  const seed = header as { timecodeScale: number; tracks: Map<number, TrackMeta> };
+
+  // Jump straight to the right part of the file. Scanning to it instead means
+  // reading everything before it, which at an hour in is over a gigabyte.
+  const startByte = await findClusterOffset(file, fromTime, seed.timecodeScale, signal);
+  if (signal.aborted) return;
+
   return walk(file, {
     wantTrack: trackId,
     signal,
     backpressure,
+    startByte,
+    seed,
     onTracks: () => undefined,
     onFrame: (frame) => {
       if (frame.timestamp + frame.duration >= fromTime) onFrame(frame);

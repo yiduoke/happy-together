@@ -3,13 +3,14 @@
 import React from 'react';
 import type { AudioTrackInfo } from './audio/types';
 import { containerOf } from './audio/types';
-import { AudioTrackEngine, type EngineStatus } from './audio/AudioTrackEngine';
+import { MsePlayer, type MseStatus } from './audio/MsePlayer';
 import { needsWasm } from './audio/wasmDecoder';
 
 /**
- * Pick which embedded audio track plays. The first track is what the browser
- * decodes natively; any other is played by AudioTrackEngine over the muted
- * element. Exactly one track at a time — two dubs at once is just noise.
+ * Pick which embedded audio track plays. The browser decodes one track by
+ * itself; choosing any other hands the file to MsePlayer, which remuxes it
+ * with that track selected. Exactly one at a time — two dubs at once is just
+ * noise.
  */
 /**
  * Which track the <video> element plays on its own: the first one whose codec
@@ -25,20 +26,22 @@ function nativelyPlaying(tracks: AudioTrackInfo[]): number | null {
 export function AudioTrackSelector(props: {
   file: File | null;
   videoRef: React.RefObject<HTMLVideoElement | null>;
+  /** The element's original source, restored when the default track is chosen. */
+  originalUrl: string | null;
 }) {
   const [tracks, setTracks] = React.useState<AudioTrackInfo[]>([]);
   const [selected, setSelected] = React.useState<number | null>(null);
   const [open, setOpen] = React.useState(false);
-  const [status, setStatus] = React.useState<{ s: EngineStatus; detail?: string }>({
+  const [status, setStatus] = React.useState<{ s: MseStatus; detail?: string }>({
     s: 'stopped',
   });
-  const engine = React.useRef<AudioTrackEngine | null>(null);
+  const engine = React.useRef<MsePlayer | null>(null);
 
   const container = props.file ? containerOf(props.file.name) : null;
 
   // New file: tear down, re-probe.
   React.useEffect(() => {
-    engine.current?.stop();
+    engine.current?.stop(props.originalUrl);
     engine.current = null;
     setTracks([]);
     setSelected(null);
@@ -60,7 +63,7 @@ export function AudioTrackSelector(props: {
       .catch(() => {});
     return () => {
       cancelled = true;
-      engine.current?.stop();
+      engine.current?.stop(props.originalUrl);
       engine.current = null;
     };
   }, [props.file, container]);
@@ -72,19 +75,21 @@ export function AudioTrackSelector(props: {
     if (!video || !props.file || !container || !track.codec) return;
     setSelected(track.id);
     if (!engine.current) {
-      engine.current = new AudioTrackEngine(video, (s, detail) => setStatus({ s, detail }));
+      engine.current = new MsePlayer(video, (s, detail) => setStatus({ s, detail }));
       if (process.env.NODE_ENV === 'development') {
-        (window as unknown as { __audioEngine?: AudioTrackEngine }).__audioEngine = engine.current;
+        (window as unknown as { __audioEngine?: MsePlayer }).__audioEngine = engine.current;
       }
     }
     // Picking the track the element already decodes just means getting out of
     // the way; anything else we have to play ourselves.
     if (track.id === nativeId) {
-      engine.current.stop();
+      void engine.current.stop(props.originalUrl);
     } else {
-      engine.current.start(props.file, container, track);
+      void engine.current.start(props.file, track, video.duration || 0);
     }
   };
+
+
 
   // A single track still needs the picker when only our bundled decoder can
   // play it — otherwise the viewer gets silence with no way to turn it on.
@@ -95,13 +100,11 @@ export function AudioTrackSelector(props: {
   const nothingPlays = nativeId === null && status.s === 'stopped';
 
   const statusLine = nothingPlays
-    ? 'no track your browser can play — pick one to decode it here'
-    : status.s === 'loading-decoder'
-      ? 'loading decoder (one-time, ~31 MB)…'
-      : status.s === 'starting'
-        ? 'switching…'
-        : status.s === 'error'
-          ? `couldn't play: ${status.detail ?? 'unknown error'}`
+    ? 'no track your browser can play — pick one to convert'
+    : status.s === 'preparing'
+      ? 'converting this track…'
+      : status.s === 'error'
+        ? `couldn't play: ${status.detail ?? 'unknown error'}`
           : null;
 
   return (

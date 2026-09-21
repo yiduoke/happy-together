@@ -83,20 +83,28 @@ export class WasmAudioDecoder {
   /**
    * Decode one batch of frames to interleaved-free float PCM. Frames must be
    * consecutive; the caller keeps track of the batch's start timestamp.
+   *
+   * `priming` holds frames from just before the batch. AC3-family codecs
+   * overlap their transforms between frames, so a batch decoded cold gets its
+   * opening samples wrong — a click at every seam. Decoding the preceding
+   * frames and discarding their output warms the decoder up, which measured
+   * an 80x reduction in seam error on a real rip.
    */
-  decode(frames: EncodedAudioFrame[]): Promise<DecodedPcm | null> {
+  decode(frames: EncodedAudioFrame[], priming: EncodedAudioFrame[] = []): Promise<DecodedPcm | null> {
     const run = async (): Promise<DecodedPcm | null> => {
       const ffmpeg = this.ffmpeg;
       const format = RAW_FORMAT[this.codec];
       if (!ffmpeg || !format || frames.length === 0) return null;
 
-      const total = frames.reduce((n, f) => n + f.data.length, 0);
+      const all = [...priming, ...frames];
+      const total = all.reduce((n, f) => n + f.data.length, 0);
       const blob = new Uint8Array(total);
       let at = 0;
-      for (const f of frames) {
+      for (const f of all) {
         blob.set(f.data, at);
         at += f.data.length;
       }
+      const primedSeconds = priming.reduce((n, f) => n + f.duration, 0);
 
       // Unique names: ffmpeg's virtual FS is shared across calls.
       const id = this.seq++;
@@ -127,11 +135,14 @@ export class WasmAudioDecoder {
         const interleaved = new Float32Array(
           data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
         );
-        const perChannel = Math.floor(interleaved.length / outChannels);
+        // Drop the warm-up output; only the real batch is wanted.
+        const skip = Math.round(primedSeconds * this.sampleRate) * outChannels;
+        const body = skip > 0 ? interleaved.subarray(skip) : interleaved;
+        const perChannel = Math.floor(body.length / outChannels);
         const channelData: Float32Array<ArrayBuffer>[] = [];
         for (let ch = 0; ch < outChannels; ch++) {
           const plane = new Float32Array(perChannel);
-          for (let i = 0; i < perChannel; i++) plane[i] = interleaved[i * outChannels + ch];
+          for (let i = 0; i < perChannel; i++) plane[i] = body[i * outChannels + ch];
           channelData.push(plane);
         }
         return { channelData, sampleRate: this.sampleRate };

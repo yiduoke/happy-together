@@ -5,7 +5,6 @@ import { useRoomContext } from '@livekit/components-react';
 import { RoomEvent, RemoteParticipant } from 'livekit-client';
 import { scanSubtitles, type BitmapSubTrack } from './subtitles/scanSubtitles';
 import { BitmapSubtitleOverlay } from './BitmapSubtitleOverlay';
-import { DiagOverlay } from './DiagOverlay';
 import { CastButton } from './CastButton';
 import { AudioTrackSelector } from './AudioTrackSelector';
 
@@ -467,7 +466,11 @@ export function WatchTogether() {
           video.appendChild(el);
           el.track.mode = 'disabled';
         }
-        setBitmapTracks(tracks.filter((t): t is BitmapSubTrack => t.kind === 'bitmap'));
+        const bmp = tracks.filter((t): t is BitmapSubTrack => t.kind === 'bitmap');
+        if (process.env.NODE_ENV === 'development') {
+          (window as unknown as { __bitmapTracks?: BitmapSubTrack[] }).__bitmapTracks = bmp;
+        }
+        setBitmapTracks(bmp);
       })
       .catch(() => {
         if (fileGeneration.current === generation) setSubScanPct(null);
@@ -548,11 +551,6 @@ export function WatchTogether() {
             }}
           />
           <BitmapSubtitleOverlay videoRef={videoRef} tracks={activeBitmapTracks} />
-          {process.env.NODE_ENV === 'development' &&
-            typeof window !== 'undefined' &&
-            new URLSearchParams(window.location.search).has('diag') && (
-              <DiagOverlay videoRef={videoRef} />
-            )}
           {videoError && (
             <div
               style={{
@@ -610,7 +608,7 @@ export function WatchTogether() {
               bitmapTracks={bitmapTracks}
               onBitmapSelectionChange={setActiveBitmapTracks}
             />
-            <AudioTrackSelector file={file} videoRef={videoRef} />
+            <AudioTrackSelector file={file} videoRef={videoRef} originalUrl={objectUrl} />
             <CastButton videoRef={videoRef} />
             {Object.entries(peerFiles).map(([id, p]) => (
               <span
