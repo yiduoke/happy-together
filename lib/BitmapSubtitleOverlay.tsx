@@ -3,6 +3,7 @@
 import React from 'react';
 import type { BitmapSubTrack } from './subtitles/scanSubtitles';
 import { decodeVobSubPacket } from './subtitles/vobsub';
+import { decodePgsDisplaySet } from './subtitles/pgs';
 
 /**
  * Draws image-based subtitles (VobSub) over the video.
@@ -39,12 +40,15 @@ export function BitmapSubtitleOverlay(props: {
   const positions = React.useRef(new Map<string, { x: number; y: number }>());
   const pending = React.useRef(new Set<string>());
   const lastKey = React.useRef('');
+  /** Authoring resolution the subtitle coordinates belong to. */
+  const space = React.useRef<{ width: number; height: number } | null>(null);
 
   // Drop cached bitmaps whenever the selection changes.
   React.useEffect(() => {
     for (const bmp of cache.current.values()) bmp?.close();
     cache.current.clear();
     positions.current.clear();
+    space.current = null;
     pending.current.clear();
     lastKey.current = '';
   }, [props.tracks]);
@@ -64,7 +68,18 @@ export function BitmapSubtitleOverlay(props: {
       try {
         const cue = track.cues[index];
         const raw = track.compressed ? await inflate(cue.data) : cue.data;
-        const image = decodeVobSubPacket(raw, track.idx.palette);
+        let image: { x: number; y: number; width: number; height: number; rgba: Uint8ClampedArray<ArrayBuffer> } | null;
+        if (track.format === 'pgs') {
+          const set = decodePgsDisplaySet(raw);
+          image = set?.image ?? null;
+          // The composition segment states the authoring size; VobSub gets it
+          // from its header instead.
+          if (set) {
+            space.current = { width: set.videoWidth, height: set.videoHeight };
+          }
+        } else {
+          image = decodeVobSubPacket(raw, track.idx.palette);
+        }
         if (!image || disposed) {
           cache.current.set(key, null);
           return;
@@ -123,10 +138,11 @@ export function BitmapSubtitleOverlay(props: {
       }
       if (!ready) return;
 
-      const space = props.tracks[0]?.idx ?? { width: 1920, height: 1080 };
-      if (canvas.width !== space.width || canvas.height !== space.height) {
-        canvas.width = space.width;
-        canvas.height = space.height;
+      const authoring =
+        space.current ?? props.tracks[0]?.idx ?? { width: 1920, height: 1080 };
+      if (canvas.width !== authoring.width || canvas.height !== authoring.height) {
+        canvas.width = authoring.width;
+        canvas.height = authoring.height;
       }
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       for (const a of active) {

@@ -28,6 +28,8 @@ export interface BitmapCue {
 export interface BitmapSubTrack {
   kind: 'bitmap';
   label: string;
+  /** VobSub carries its palette in the header; PGS carries one per subtitle. */
+  format: 'vobsub' | 'pgs';
   idx: IdxInfo;
   compressed: boolean;
   cues: BitmapCue[];
@@ -65,6 +67,7 @@ interface TrackState {
   label: string;
   codecId: string;
   compressed: boolean;
+  format?: 'vobsub' | 'pgs';
   text?: Array<{ start: number; end: number; text: string }>;
   bitmap?: BitmapCue[];
   idx?: IdxInfo;
@@ -119,11 +122,23 @@ export async function scanSubtitles(
             label,
             codecId,
             compressed,
+            format: 'vobsub',
             bitmap: [],
             idx: parseIdx(new Uint8Array(priv)),
           });
+        } else if (codecId === 'S_HDMV/PGS') {
+          // PGS has no header palette: each display set carries its own, and
+          // the authoring size comes from the composition segment.
+          tracks.set(number, {
+            number,
+            label,
+            codecId,
+            compressed,
+            format: 'pgs',
+            bitmap: [],
+            idx: { palette: [], width: 1920, height: 1080 },
+          });
         }
-        // S_HDMV/PGS and other image formats are not decoded yet.
       }
     }
 
@@ -135,7 +150,15 @@ export async function scanSubtitles(
       const payload: Uint8Array = block.payload;
 
       if (track.bitmap) {
-        track.bitmap.push({ start, end: start + duration, data: new Uint8Array(payload) });
+        // PGS says nothing about duration: a later display set with no image
+        // clears the screen, so each cue runs until the next one begins.
+        if (track.format === 'pgs') {
+          const previous = track.bitmap[track.bitmap.length - 1];
+          if (previous) previous.end = start;
+          track.bitmap.push({ start, end: Number.POSITIVE_INFINITY, data: new Uint8Array(payload) });
+        } else {
+          track.bitmap.push({ start, end: start + duration, data: new Uint8Array(payload) });
+        }
         return;
       }
       if (!track.text) return;
@@ -201,9 +224,13 @@ export async function scanSubtitles(
     if (t.text && t.text.length > 0) {
       out.push({ kind: 'text', label: t.label, vttUrl: cuesToVttUrl(t.text) });
     } else if (t.bitmap && t.bitmap.length > 0 && t.idx) {
+      // A trailing PGS cue has no successor to bound it.
+      const last = t.bitmap[t.bitmap.length - 1];
+      if (last && !Number.isFinite(last.end)) last.end = last.start + 5000;
       out.push({
         kind: 'bitmap',
         label: t.label,
+        format: t.format ?? 'vobsub',
         idx: t.idx,
         compressed: t.compressed,
         cues: t.bitmap,
