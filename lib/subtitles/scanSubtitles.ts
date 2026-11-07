@@ -1,9 +1,13 @@
 'use client';
 
 import { parseIdx, type IdxInfo } from './vobsub';
+import { cuesToVttUrl } from './vtt';
 
 /**
- * Walks a Matroska file once and pulls out every subtitle track we can show.
+ * Pulls out every subtitle track we can show, from Matroska or MP4.
+ *
+ * Matroska is walked once, streaming. MP4 only reads its `moov` box and the
+ * subtitle samples (see ./mp4Subtitles).
  *
  * Text tracks (SRT/ASS) become WebVTT the <video> element can take directly.
  * Bitmap tracks (VobSub) can't use <track> at all — browsers have no notion
@@ -39,27 +43,11 @@ export type ScannedTrack = TextSubTrack | BitmapSubTrack;
 
 const SSA_CODECS = /^S_TEXT\/(ASS|SSA)$/i;
 
-function msToVtt(ms: number) {
-  const pad = (n: number, w = 2) => String(n).padStart(w, '0');
-  return `${pad(Math.floor(ms / 3600000))}:${pad(Math.floor((ms % 3600000) / 60000))}:${pad(
-    Math.floor((ms % 60000) / 1000),
-  )}.${pad(Math.floor(ms % 1000), 3)}`;
-}
-
 function cleanText(text: string) {
   return text
     .replace(/\{[^}]*\}/g, '') // ASS style overrides
     .replace(/\\N/gi, '\n')
     .trim();
-}
-
-function cuesToVttUrl(cues: Array<{ start: number; end: number; text: string }>) {
-  const body = cues
-    .filter((c) => c.text)
-    .sort((a, b) => a.start - b.start)
-    .map((c) => `${msToVtt(c.start)} --> ${msToVtt(c.end)}\n${c.text}`)
-    .join('\n\n');
-  return URL.createObjectURL(new Blob([`WEBVTT\n\n${body}`], { type: 'text/vtt' }));
 }
 
 interface TrackState {
@@ -78,6 +66,10 @@ export async function scanSubtitles(
   onProgress?: (fraction: number) => void,
   signal?: AbortSignal,
 ): Promise<ScannedTrack[]> {
+  if (/\.(mp4|m4v|mov)$/i.test(file.name)) {
+    const { scanMp4Subtitles } = await import('./mp4Subtitles');
+    return scanMp4Subtitles(file, onProgress, signal);
+  }
   if (!/\.(mkv|webm)$/i.test(file.name)) return [];
   const { EbmlStreamDecoder, EbmlTagId } = await import('ebml-stream');
 

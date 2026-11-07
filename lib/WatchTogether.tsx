@@ -11,7 +11,8 @@ import { AudioTrackSelector } from './AudioTrackSelector';
 const SYNC_TOPIC = 'watch-sync';
 
 // Browsers don't demux subtitle tracks embedded in local MP4/MKV files, so
-// tracks arrive as sidecar .srt/.vtt files added as <track> elements.
+// loadFile() scans the container itself and appends <track> elements; sidecar
+// .srt/.vtt files can still be added by hand.
 function srtToVtt(srt: string) {
   return (
     'WEBVTT\n\n' +
