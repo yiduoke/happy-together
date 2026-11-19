@@ -69,6 +69,22 @@ export function Sidebar(props: {
           position: 'relative',
         }}
       >
+        {/* Own row at the top: in the bottom control bar it had nowhere to sit
+            in a narrow column and landed on top of the other buttons. */}
+        {props.onToggleWebcamOnly && (
+          <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '4px 6px' }}>
+            <button
+              className="lk-button"
+              onClick={props.onToggleWebcamOnly}
+              title={
+                props.webcamOnly ? 'Back to the film' : 'Hide the film and just talk (Esc to exit)'
+              }
+              style={{ whiteSpace: 'nowrap', fontSize: 12 }}
+            >
+              {props.webcamOnly ? '🎬 Film' : '💬 Just chat'}
+            </button>
+          </div>
+        )}
         {/* Webcam tiles — shrink but stay visible while chat is open */}
         <div
           style={{
@@ -97,34 +113,10 @@ export function Sidebar(props: {
           }}
           messageFormatter={formatChatMessageLinks}
         />
-        {/* Wraps onto a second line in a narrow column: the stock control bar
-            alone already fills ~260px, and a clipped button is the problem
-            we're fixing, not one to add. */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            flexWrap: 'wrap',
-          }}
-        >
-          <ControlBar
-            variation="minimal"
-            controls={{ chat: true, settings: !!props.SettingsComponent }}
-          />
-          {props.onToggleWebcamOnly && (
-            <button
-              className="lk-button"
-              onClick={props.onToggleWebcamOnly}
-              title={
-                props.webcamOnly ? 'Back to the film' : 'Hide the film and just talk (Esc to exit)'
-              }
-              style={{ whiteSpace: 'nowrap', fontSize: 12 }}
-            >
-              {props.webcamOnly ? '🎬 Film' : '💬 Just chat'}
-            </button>
-          )}
-        </div>
+        <ControlBar
+          variation="minimal"
+          controls={{ chat: true, settings: !!props.SettingsComponent }}
+        />
         {props.SettingsComponent && (
           <div
             className="lk-settings-menu-modal"

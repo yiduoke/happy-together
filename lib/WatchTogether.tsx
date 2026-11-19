@@ -6,6 +6,7 @@ import { RoomEvent, RemoteParticipant } from 'livekit-client';
 import { scanSubtitles, type BitmapSubTrack } from './subtitles/scanSubtitles';
 import { BitmapSubtitleOverlay } from './BitmapSubtitleOverlay';
 import { CastButton } from './CastButton';
+import { SeekShortcuts } from './SeekShortcuts';
 import { AudioTrackSelector } from './AudioTrackSelector';
 
 const SYNC_TOPIC = 'watch-sync';
@@ -14,10 +15,7 @@ const SYNC_TOPIC = 'watch-sync';
 // loadFile() scans the container itself and appends <track> elements; sidecar
 // .srt/.vtt files can still be added by hand.
 function srtToVtt(srt: string) {
-  return (
-    'WEBVTT\n\n' +
-    srt.replace(/\r/g, '').replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2')
-  );
+  return 'WEBVTT\n\n' + srt.replace(/\r/g, '').replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2');
 }
 
 function SubtitleSelector(props: {
@@ -121,27 +119,28 @@ function SubtitleSelector(props: {
         {open ? '▾' : '▸'} subtitles
         {selected.size + bitmapOn.size > 0 ? ` (${selected.size + bitmapOn.size} on)` : ''}
       </button>
-      {open && tracks.map((track) => (
-        <label
-          key={track.index}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            cursor: 'pointer',
-            fontSize: 12,
-            lineHeight: 1,
-          }}
-        >
-          <input
-            type="checkbox"
-            checked={selected.has(track.index)}
-            onChange={() => toggle(track.index)}
-            style={{ cursor: 'pointer' }}
-          />
-          <span>{track.label}</span>
-        </label>
-      ))}
+      {open &&
+        tracks.map((track) => (
+          <label
+            key={track.index}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              cursor: 'pointer',
+              fontSize: 12,
+              lineHeight: 1,
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={selected.has(track.index)}
+              onChange={() => toggle(track.index)}
+              style={{ cursor: 'pointer' }}
+            />
+            <span>{track.label}</span>
+          </label>
+        ))}
       {open &&
         props.bitmapTracks.map((track, i) => (
           <label
@@ -496,7 +495,9 @@ export function WatchTogether() {
     autoFileLoaded.current = true;
     fetch(path)
       .then((r) => r.blob())
-      .then((blob) => loadFile(new File([blob], path.split('/').pop() || 'video', { type: blob.type })))
+      .then((blob) =>
+        loadFile(new File([blob], path.split('/').pop() || 'video', { type: blob.type })),
+      )
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -552,6 +553,7 @@ export function WatchTogether() {
             }}
           />
           <BitmapSubtitleOverlay videoRef={videoRef} tracks={activeBitmapTracks} />
+          <SeekShortcuts videoRef={videoRef} />
           {videoError && (
             <div
               style={{
