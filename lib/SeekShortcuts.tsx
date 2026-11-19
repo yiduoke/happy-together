@@ -32,8 +32,15 @@ const TEXT_INPUT_TYPES = new Set([
 function isTyping(target: EventTarget | null) {
   const el = target as HTMLElement | null;
   if (!el || !el.tagName) return false;
-  if (el.isContentEditable || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') return true;
-  return el.tagName === 'INPUT' && TEXT_INPUT_TYPES.has((el as HTMLInputElement).type);
+  if (el.tagName === 'SELECT') return true;
+  const isInput = el.tagName === 'INPUT' && TEXT_INPUT_TYPES.has((el as HTMLInputElement).type);
+  if (isInput || el.tagName === 'TEXTAREA') {
+    // The chat box keeps focus after you send a message. With nothing in it
+    // the arrows have no caret to move, so let them through rather than
+    // leaving them dead until you click away.
+    return (el as HTMLInputElement | HTMLTextAreaElement).value !== '';
+  }
+  return el.isContentEditable;
 }
 
 /**
@@ -56,13 +63,20 @@ export function SeekShortcuts(props: { videoRef: React.RefObject<HTMLVideoElemen
       if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
       if (isTyping(e.target)) return;
       const video = props.videoRef.current;
-      // Hidden (webcam-only mode) means nobody is watching it.
-      if (!video || video.offsetParent === null || !Number.isFinite(video.duration)) return;
+      // Hidden (webcam-only mode) means nobody is watching it. Not
+      // offsetParent: a fullscreen element is position:fixed, so that is null
+      // exactly when the film is filling the screen.
+      if (!video || video.getClientRects().length === 0 || !Number.isFinite(video.duration)) {
+        return;
+      }
 
       // Capture phase + stop: with the video focused the browser would seek
       // too, and the two jumps would add up to 10 seconds.
       e.preventDefault();
       e.stopPropagation();
+      // A held key auto-repeats ~30 times a second, and every repeat would
+      // jump 5s: half a second of holding is 90s. One press, one jump.
+      if (e.repeat) return;
 
       const dir: Flash['dir'] = e.key === 'ArrowLeft' ? 'back' : 'forward';
       // While a seek is pending currentTime already reports its target, so
