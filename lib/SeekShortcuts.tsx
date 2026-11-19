@@ -8,16 +8,32 @@ const STACK_WINDOW_MS = 700;
 
 type Flash = { dir: 'back' | 'forward'; seconds: number; id: number };
 
+// Inputs that take typed text, where the arrows move the caret. Checkboxes,
+// radios and the file picker are inputs too, but they keep focus after being
+// clicked — treating them as typing left the arrows dead after touching any
+// subtitle or audio option.
+const TEXT_INPUT_TYPES = new Set([
+  'text',
+  'search',
+  'email',
+  'url',
+  'tel',
+  'password',
+  'number',
+  'date',
+  'time',
+  'datetime-local',
+  'month',
+  'week',
+  // The arrows move a slider's value, so leave those to it.
+  'range',
+]);
+
 function isTyping(target: EventTarget | null) {
   const el = target as HTMLElement | null;
   if (!el || !el.tagName) return false;
-  return (
-    el.isContentEditable ||
-    el.tagName === 'TEXTAREA' ||
-    el.tagName === 'SELECT' ||
-    // A range input uses the arrows itself, e.g. a volume slider.
-    el.tagName === 'INPUT'
-  );
+  if (el.isContentEditable || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') return true;
+  return el.tagName === 'INPUT' && TEXT_INPUT_TYPES.has((el as HTMLInputElement).type);
 }
 
 /**

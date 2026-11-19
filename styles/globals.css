@@ -77,6 +77,13 @@ h2 a {
   row-gap: 0.25rem;
 }
 
+/* The stock rule caps the bar at one row's height (69px), and loads after
+   this file, so it needs the extra specificity to lose. Wrapped rows overflow
+   that box and fall off the bottom of the page. */
+.lk-room-container .lk-control-bar {
+  max-height: none;
+}
+
 /*
  * SelfTile wraps ParticipantTile so the mic/camera toggles can be positioned
  * over it. That wrapper becomes the grid/carousel child, and the tile inside
