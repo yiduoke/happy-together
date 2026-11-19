@@ -7,6 +7,7 @@ import { scanSubtitles, type BitmapSubTrack } from './subtitles/scanSubtitles';
 import { BitmapSubtitleOverlay } from './BitmapSubtitleOverlay';
 import { CastButton } from './CastButton';
 import { SeekShortcuts } from './SeekShortcuts';
+import { IdleFade } from './IdleFade';
 import { AudioTrackSelector } from './AudioTrackSelector';
 
 const SYNC_TOPIC = 'watch-sync';
@@ -594,7 +595,10 @@ export function WatchTogether() {
               </div>
             </div>
           )}
-          <div
+          {/* Out of the way during the film; hover where it sits to bring it back. */}
+          <IdleFade
+            idleMs={10_000}
+            resetKey={fileName}
             style={{
               position: 'absolute',
               top: 8,
@@ -643,7 +647,7 @@ export function WatchTogether() {
                 {p.name} is watching: {p.file}
               </span>
             ))}
-          </div>
+          </IdleFade>
         </>
       ) : (
         <div
