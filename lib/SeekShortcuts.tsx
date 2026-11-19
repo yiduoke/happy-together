@@ -43,6 +43,16 @@ function isTyping(target: EventTarget | null) {
   return el.isContentEditable;
 }
 
+/** Space presses these natively (a click), so leave it to them. */
+function spaceActivates(target: EventTarget | null) {
+  const el = target as HTMLElement | null;
+  if (!el || !el.tagName) return false;
+  return (
+    ['BUTTON', 'A', 'SUMMARY', 'SELECT'].includes(el.tagName) ||
+    (el.tagName === 'INPUT' && !TEXT_INPUT_TYPES.has((el as HTMLInputElement).type))
+  );
+}
+
 /**
  * Left/right arrows jump the film 5 seconds, wherever focus happens to be,
  * and flash the jump on the picture. The browser only seeks on the arrows
@@ -52,15 +62,68 @@ function isTyping(target: EventTarget | null) {
  * Seeking goes through the normal `seeked` event, so it syncs to the room
  * exactly like dragging the scrubber does.
  */
-export function SeekShortcuts(props: { videoRef: React.RefObject<HTMLVideoElement> }) {
+export function SeekShortcuts(props: {
+  videoRef: React.RefObject<HTMLVideoElement>;
+  /** Focusable (tabIndex -1) element around the film; see the click handler. */
+  stageRef: React.RefObject<HTMLElement>;
+}) {
   const [flash, setFlash] = React.useState<Flash | null>(null);
   const last = React.useRef<{ dir: Flash['dir']; at: number; seconds: number } | null>(null);
   const hideTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Clicking the video's built-in controls (play, scrubber) leaves focus
+  // inside the browser's own control widget, and from there key presses go
+  // only to that widget: the page never sees them, so these shortcuts never
+  // run. The scrubber then steps by its own increment (a minute or more on a
+  // film), Space presses the focused play button, and nothing flashes.
+  // Clicks on those controls don't reach the page either, but the media
+  // events they cause do — so use those to pull focus back out to the stage.
+  React.useEffect(() => {
+    const video = props.videoRef.current;
+    if (!video) return;
+    let settle: ReturnType<typeof setTimeout> | null = null;
+    const reclaim = () => {
+      // Only when focus is on the film. Remote play/pause/seek fire these
+      // events too, and must not pull you out of the chat box mid-sentence.
+      if (document.activeElement !== video) return;
+      props.stageRef.current?.focus({ preventScroll: true });
+    };
+    const reclaimSoon = () => setTimeout(reclaim, 0);
+    // Dragging the scrubber seeks continuously; wait for it to settle so the
+    // drag isn't interrupted.
+    const reclaimAfterScrub = () => {
+      if (settle) clearTimeout(settle);
+      settle = setTimeout(reclaim, 400);
+    };
+    video.addEventListener('play', reclaimSoon);
+    video.addEventListener('pause', reclaimSoon);
+    video.addEventListener('seeked', reclaimAfterScrub);
+    return () => {
+      video.removeEventListener('play', reclaimSoon);
+      video.removeEventListener('pause', reclaimSoon);
+      video.removeEventListener('seeked', reclaimAfterScrub);
+      if (settle) clearTimeout(settle);
+    };
+  }, [props.videoRef, props.stageRef]);
+
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
       if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      if (e.key === ' ') {
+        // With focus on the stage the browser's own Space no longer applies,
+        // so play/pause has to be handled here. Capture + stop also keeps the
+        // browser from toggling a second time when the video has focus.
+        if (isTyping(e.target) || spaceActivates(e.target)) return;
+        const video = props.videoRef.current;
+        if (!video || video.getClientRects().length === 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.repeat) return;
+        if (video.paused) video.play().catch(() => {});
+        else video.pause();
+        return;
+      }
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
       if (isTyping(e.target)) return;
       const video = props.videoRef.current;
       // Hidden (webcam-only mode) means nobody is watching it. Not

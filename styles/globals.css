@@ -84,6 +84,13 @@ h2 a {
   max-height: none;
 }
 
+/* Mic and camera are button groups sized height:100% of the bar. Once the
+   bar is allowed to grow, that makes them stretch to its full height instead
+   of sitting at button height. */
+.lk-room-container .lk-control-bar .lk-button-group {
+  height: auto;
+}
+
 /*
  * SelfTile wraps ParticipantTile so the mic/camera toggles can be positioned
  * over it. That wrapper becomes the grid/carousel child, and the tile inside

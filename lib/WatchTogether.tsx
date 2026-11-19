@@ -176,6 +176,8 @@ function SubtitleSelector(props: {
 const TICK_INTERVAL_MS = 2000;
 // Drift thresholds (seconds)
 const HARD_SEEK_THRESHOLD = 3;
+/** Long enough to cover a round trip, short of the 2s tick interval. */
+const TICK_GRACE_MS = 1500;
 const NUDGE_THRESHOLD = 0.3;
 
 type SyncMsg =
@@ -204,6 +206,7 @@ const decoder = new TextDecoder();
 export function WatchTogether() {
   const room = useRoomContext();
   const videoRef = React.useRef<HTMLVideoElement | null>(null);
+  const stageRef = React.useRef<HTMLDivElement | null>(null);
   const [fileName, setFileName] = React.useState<string | null>(null);
   const [file, setFile] = React.useState<File | null>(null);
   const [objectUrl, setObjectUrl] = React.useState<string | null>(null);
@@ -212,6 +215,12 @@ export function WatchTogether() {
   // matching event consumes it instead of re-broadcasting. Unlike a time
   // window, this never swallows a genuine user action that lands nearby.
   const expected = React.useRef({ play: 0, pause: 0, seek: 0 });
+  // Ticks are unreliable and travel separately from seeks, so one sent just
+  // before a peer learned of a seek can land just after it, still carrying
+  // the old position — and a 5s arrow-key jump is past the hard-seek
+  // threshold, so that stale tick snapped the viewer straight back. Ticks are
+  // ignored for a moment after any seek, local or applied.
+  const ignoreTicksUntil = React.useRef(0);
 
   const send = React.useCallback(
     (msg: SyncMsg, reliable = true) => {
@@ -291,6 +300,7 @@ export function WatchTogether() {
           break;
         case 'tick': {
           if (!video || video.paused || msg.paused) return;
+          if (performance.now() < ignoreTicksUntil.current) return;
           // Only correct toward the deterministic clock master.
           if (participant.identity >= room.localParticipant.identity) return;
           const delta = msg.time - video.currentTime;
@@ -504,12 +514,16 @@ export function WatchTogether() {
 
   return (
     <div
+      ref={stageRef}
+      // Focusable so keyboard shortcuts have somewhere to live; see SeekShortcuts.
+      tabIndex={-1}
       style={{
         display: 'flex',
         flexDirection: 'column',
         height: '100%',
         background: '#000',
         position: 'relative',
+        outline: 'none',
       }}
     >
       {objectUrl ? (
@@ -534,6 +548,7 @@ export function WatchTogether() {
             }}
             onSeeked={() => {
               const video = videoRef.current;
+              ignoreTicksUntil.current = performance.now() + TICK_GRACE_MS;
               if (video && !consumeExpected('seek')) send({ t: 'seek', time: video.currentTime });
             }}
             onLoadedData={() => setVideoError(null)}
@@ -553,7 +568,7 @@ export function WatchTogether() {
             }}
           />
           <BitmapSubtitleOverlay videoRef={videoRef} tracks={activeBitmapTracks} />
-          <SeekShortcuts videoRef={videoRef} />
+          <SeekShortcuts videoRef={videoRef} stageRef={stageRef} />
           {videoError && (
             <div
               style={{
